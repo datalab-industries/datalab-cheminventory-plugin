@@ -1,0 +1,14 @@
+[project]
+name = "datalab-cheminventory-plugin"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Matthew Evans", email = "git@ml-evs.science" }
+]
+requires-python = ">=3.10"
+dependencies = ["datalab-api ~= 0.2"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
