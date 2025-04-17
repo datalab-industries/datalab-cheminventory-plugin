@@ -82,11 +82,9 @@ class ChemInventoryClient:
 
     def sync_to_datalab(self, datalab_url: str, collection_id: str = "cheminventory") -> None:
         """Fetch inventory and upload to Datalab."""
-        inventory = self.get_inventory()
-        entries = [self.map_inventory_row(row) for row in inventory]
-
         datalab_client = DatalabClient(datalab_url)
-        for entry in entries:
+        for row in self.get_inventory():
+            entry = self.map_inventory_row(row)
             try:
                 datalab_client.create_item(
                     entry["item_id"],
