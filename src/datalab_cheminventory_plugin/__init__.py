@@ -80,26 +80,26 @@ class ChemInventoryClient:
         return starting_material
 
 
+    def sync_to_datalab(self, datalab_url: str, collection_id: str = "cheminventory") -> None:
+        """Fetch inventory and upload to Datalab."""
+        inventory = self.get_inventory()
+        entries = [self.map_inventory_row(row) for row in inventory]
+
+        datalab_client = DatalabClient(datalab_url)
+        for entry in entries:
+            try:
+                datalab_client.create_item(
+                    entry["item_id"],
+                    entry["type"],
+                    entry,
+                    collection_id=collection_id,
+                )
+                print("success ", entry.get("Barcode"))
+            except (KeyError, DuplicateItemError):
+                print(f"dupe {entry.get('Barcode')}")
+            except Exception as e:
+                print(f"Error creating item {entry.get('Barcode')}: {e}")
+
 if __name__ == "__main__":
     client = ChemInventoryClient()
-    inventory = client.get_inventory()
-
-    entries = []
-
-    for row in inventory:
-        entries.append(client.map_inventory_row(row))
-
-    datalab_client = DatalabClient(DATALAB_URL)
-    for entry in entries:
-        try:
-            datalab_client.create_item(
-                entry["item_id"],
-                "starting_materials",
-                entry,
-                collection_id="cheminventory",
-            )
-            print("succees ", entry["Barcode"])
-        except (KeyError, DuplicateItemError):
-            print(f"dupe {entry['Barcode']}")
-        except Exception as e:
-            print(f"Error creating item {entry['Barcode']}: {e}")
+    client.sync_to_datalab(DATALAB_URL)
