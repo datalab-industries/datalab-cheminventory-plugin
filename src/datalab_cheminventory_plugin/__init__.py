@@ -1,7 +1,11 @@
 from importlib.metadata import version
 import httpx
+import os
+from datalab_api import DatalabClient, DuplicateItemError
 
 __version__ = version("datalab-cheminventory-plugin")
+
+DATALAB_URL = os.getenv("DATALAB_API_URL")
 
 class ChemInventoryClient:
 
@@ -13,6 +17,9 @@ class ChemInventoryClient:
     def __init__(self, inventory: int = 0, api_key: str | None = None):
 
         self.api_key = api_key
+        if api_key is None:
+            self.api_key = os.getenv("CHEMINVENTORY_API_KEY")
+
         resp = self.session.post(f"{self.api_url}/general/getdetails", json={"authtoken": self.api_key})
         if resp.status_code != 200:
             raise ValueError(f"Bad response from cheminventory: {resp.content}")
@@ -52,3 +59,47 @@ class ChemInventoryClient:
         if self._session is None:
             return httpx.Client(timeout=self.timeout)
         return self._session
+
+    def map_inventory_row(self, row) -> dict:
+        starting_material = {}
+        starting_material["item_id"] = row["id"]
+        starting_material["Barcode"] = row["barcode"] or None
+        starting_material["Container Name"] = row["name"]
+        starting_material["Container Size"] = row["size"]
+        starting_material["Supplier"] = row["supplier"]
+        starting_material["Substance CAS"] = row["cas"]
+        starting_material["GHS H-codes"] = row["hcodes"]
+        starting_material["SMILES"] = row["smiles"]
+        starting_material["Unit"] = row["unit"]
+        starting_material["Molecular Formula"] = row["molecularformula"] or None
+        starting_material["Molecular Weight"] = row["molecularweight"] or None
+        starting_material["Location"] = row["location"]
+        starting_material["Date Acquired"] = row["dateacquired"] or None
+        starting_material["type"] = "starting_materials"
+
+        return starting_material
+
+
+if __name__ == "__main__":
+    client = ChemInventoryClient()
+    inventory = client.get_inventory()
+
+    entries = []
+
+    for row in inventory:
+        entries.append(client.map_inventory_row(row))
+
+    datalab_client = DatalabClient(DATALAB_URL)
+    for entry in entries:
+        try:
+            datalab_client.create_item(
+                entry["item_id"],
+                "starting_materials",
+                entry,
+                collection_id="cheminventory",
+            )
+            print("succees ", entry["Barcode"])
+        except (KeyError, DuplicateItemError):
+            print(f"dupe {entry['Barcode']}")
+        except Exception as e:
+            print(f"Error creating item {entry['Barcode']}: {e}")
