@@ -122,9 +122,10 @@ class ChemInventoryClient:
         starting_material["Location"] = row["location"]
         starting_material["Date Acquired"] = row["dateacquired"] or None
         starting_material["type"] = "starting_materials"
+        starting_material["status"] = "disposed" if row["disposed"] == "1" else "available"
         file_paths = self.get_linked_files(row["substanceid"])
 
-        return starting_material, files
+        return starting_material, file_paths
 
 
     def sync_to_datalab(self, collection_id: str | None = None, dryrun: bool = True) -> None:
