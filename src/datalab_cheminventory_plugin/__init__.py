@@ -136,41 +136,67 @@ class ChemInventoryClient:
         with DatalabClient(self.datalab_api_url) as datalab_client:
             successes = 0 
             failures = 0
-            duplicates = 0
+            updated = 0
             total = 0
 
             for row in rich.progress.track(self.get_inventory(), description="Importing cheminventory"):
                 entry, files = self.map_inventory_row(row)
+                existing_fnames = set()
                 total += 1
                 if dryrun:
                     print(entry)
                 else:
                     try:
-                        datalab_client.create_item(
-                            entry["item_id"],
-                            entry["type"],
-                            entry,
-                            collection_id=collection_id,
-                        )
-
-                        for f in files:
-                            datalab_client.upload_file(
+                        try:
+                            datalab_client.create_item(
                                 entry["item_id"],
-                                f,
+                                entry["type"],
+                                entry,
+                                collection_id=collection_id,
                             )
-                        successes += 1
-                        print(f"[green]✓\t{entry.get('item_id')}\t{entry.get('Barcode')}[/green]")
-                    except (KeyError, DuplicateItemError):
-                        duplicates += 1
-                        print(f"[yellow]·\t{entry.get('item_id')}\t{entry.get('Barcode')}[/yellow]")
+
+                            successes += 1
+                            print(f"[green]✓\t{entry.get('item_id')}\t{entry.get('Barcode')}[/green]")
+                        except DuplicateItemError:
+                            # If the item already exists, pull it and see if it needs to be updated
+                            existing_item = datalab_client.get_item(entry["item_id"])
+                            if existing_item["type"] != entry["type"]:
+                                raise ValueError(f"Item {entry['item_id']} already exists with type {existing_item['type']}, but we are trying to create it with type {entry['type']}.")
+
+                            response = datalab_client.update_item(
+                                entry["item_id"],
+                                entry,
+                            )
+
+                            updated += 1
+                            existing_fnames = {f["original_name"] for f in existing_item["files"]}
+                            print(f"[yellow]·\t{entry.get('item_id')}\t{entry.get('Barcode')}[/yellow]")
+
+                        if files:
+                            new_fnames = {f.name for f in files}
+                            update_file_set = new_fnames - existing_fnames
+                            for f in files:
+                                if f.name in update_file_set:
+                                    file_resp = datalab_client.upload_file(
+                                        entry["item_id"],
+                                        f,
+                                    )
+                                    file_id = file_resp["file_id"]
+                                    new_block_resp = datalab_client.create_data_block(
+                                        item_id=entry["item_id"],
+                                        block_type="media",
+                                        file_ids=file_id,
+                                    )
+                                    print(f"[green]✓\tAdded file to {entry.get('item_id')}\t{entry.get('Barcode')}[/green]")
+
                     except Exception as e:
                         failures += 1
                         print(f"[red]✗\t{entry.get('item_id')}\t{entry.get('Barcode')}:\n{e}[/red]")
 
             if not dryrun:
                 print(f"\n[green]Created {successes} items.[/green]")
-                if duplicates > 0:
-                    print(f"[yellow]Skipped {duplicates} items (already exist).[/yellow]")
+                if updated > 0:
+                    print(f"[yellow]Skipped {updated} items (already exist).[/yellow]")
                 if failures > 0:
                     print(f"[red]Failed to create {failures} items.[/red]")
 
