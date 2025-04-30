@@ -107,9 +107,8 @@ class ChemInventoryClient:
         return self._session
 
     def map_inventory_row(self, row) -> dict:
-        files = []
         starting_material = {}
-        starting_material["item_id"] = row["id"]
+        starting_material["item_id"] = str(row["id"])
         starting_material["Barcode"] = row["barcode"] or None
         starting_material["Container Name"] = row["name"]
         starting_material["Container Size"] = row["size"]
@@ -180,4 +179,4 @@ class ChemInventoryClient:
 
 if __name__ == "__main__":
     client = ChemInventoryClient()
-    client.sync_to_datalab()
+    client.sync_to_datalab(dryrun=False)
