@@ -234,6 +234,7 @@ class ChemInventoryClient:
 
 def _main():
     import argparse
+
     parser = argparse.ArgumentParser(
         description="Sync from cheminventory to datalab.",
     )
@@ -245,6 +246,7 @@ def _main():
     args = parser.parse_args()
     client = ChemInventoryClient()
     client.sync_to_datalab(dry_run=args.dry_run)
+
 
 if __name__ == "__main__":
     _main()
