@@ -141,10 +141,10 @@ class ChemInventoryClient:
 
         return starting_material, file_paths
 
-    def sync_to_datalab(self, collection_id: str | None = None, dryrun: bool = True) -> None:
+    def sync_to_datalab(self, collection_id: str | None = None, dry_run: bool = True) -> None:
         """Fetch inventory and upload to Datalab."""
 
-        if dryrun:
+        if dry_run:
             pprint("Dry run mode: no datalab items will be created.")
 
         with DatalabClient(self.datalab_api_url) as datalab_client:
@@ -159,7 +159,7 @@ class ChemInventoryClient:
                 entry, files = self.map_inventory_row(row)
                 existing_fnames = set()
                 total += 1
-                if dryrun:
+                if dry_run:
                     pprint(entry)
                 else:
                     try:
@@ -221,17 +221,30 @@ class ChemInventoryClient:
                             f"[red]✗\t{entry.get('item_id')}\t{entry.get('Barcode')}:\n{e}[/red]"
                         )
 
-            if not dryrun:
+            if not dry_run:
                 pprint(f"\n[green]Created {successes} items.[/green]")
                 if updated > 0:
                     pprint(f"[yellow]Updated {updated} items.[/yellow]")
                 if failures > 0:
                     pprint(f"[red]Failed to create {failures} items.[/red]")
 
-            if dryrun:
+            if dry_run:
                 pprint(f"\n[green]Found {total} items.[/green]")
 
 
-if __name__ == "__main__":
+def _main():
+    import argparse
+    parser = argparse.ArgumentParser(
+        description="Sync from cheminventory to datalab.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Do not create items in datalab.",
+    )
+    args = parser.parse_args()
     client = ChemInventoryClient()
-    client.sync_to_datalab(dryrun=False)
+    client.sync_to_datalab(dry_run=args.dry_run)
+
+if __name__ == "__main__":
+    _main()
