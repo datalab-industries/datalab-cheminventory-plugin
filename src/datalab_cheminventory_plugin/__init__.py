@@ -122,6 +122,7 @@ class ChemInventoryClient:
         starting_material["Location"] = row["location"]
         starting_material["Date Acquired"] = row["dateacquired"] or None
         starting_material["type"] = "starting_materials"
+        starting_material["description"] = row["comments"] if row["comments"] != "None" else None
         starting_material["status"] = "disposed" if row["disposed"] == "1" else "available"
         file_paths = self.get_linked_files(row["substanceid"])
 
@@ -197,7 +198,7 @@ class ChemInventoryClient:
             if not dryrun:
                 print(f"\n[green]Created {successes} items.[/green]")
                 if updated > 0:
-                    print(f"[yellow]Skipped {updated} items (already exist).[/yellow]")
+                    print(f"[yellow]Updated {updated} items.[/yellow]")
                 if failures > 0:
                     print(f"[red]Failed to create {failures} items.[/red]")
 
