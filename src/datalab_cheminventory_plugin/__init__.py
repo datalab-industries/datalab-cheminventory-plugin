@@ -149,7 +149,9 @@ class ChemInventoryClient:
             return httpx.Client(timeout=self.timeout)
         return self._session
 
-    def map_inventory_row(self, row: dict[str, Any]) -> tuple[dict[str, Any], list]:
+    def map_inventory_row(
+        self, row: dict[str, Any], custom_fields: dict[str, str] | None = None
+    ) -> dict[str, Any]:
         starting_material: dict[str, str | int | None] = {}
         starting_material["item_id"] = str(row["id"])
         starting_material["Barcode"] = row["barcode"] or None
@@ -165,11 +167,24 @@ class ChemInventoryClient:
         starting_material["Location"] = row["location"]
         starting_material["Date Acquired"] = row["dateacquired"] or None
         starting_material["type"] = "starting_materials"
-        starting_material["description"] = row["comments"] if row["comments"] != "None" else None
+        starting_material["description"] = row["comments"] if row["comments"] != "None" else ""
         starting_material["status"] = "disposed" if row["disposed"] == "1" else "available"
-        file_paths = self.get_linked_files(row["substanceid"])
 
-        return starting_material, file_paths
+        if custom_fields:
+            if "Datalab ID" in custom_fields:
+                value = row.get(custom_fields["Datalab ID"])
+                if value:
+                    starting_material["refcode"] = value
+            if "Identifying #" in custom_fields:
+                value = row.get(custom_fields["Identifying #"])
+                if value:
+                    starting_material["description"] += f"\nIdentifying #: {value}"  # type: ignore
+            if "Form type" in custom_fields:
+                value = row.get(custom_fields["Form type"])
+                if value:
+                    starting_material["description"] += f"\nForm type: {value}"  # type: ignore
+
+        return starting_material
 
     def sync_to_datalab(self, collection_id: str | None = None, dry_run: bool = True) -> None:
         """Fetch inventory and upload to Datalab."""
@@ -183,10 +198,15 @@ class ChemInventoryClient:
             updated = 0
             total = 0
 
+            custom_fields = self.get_custom_fields()
+
             for row in rich.progress.track(
                 self.get_inventory(), description="Importing cheminventory"
             ):
-                entry, files = self.map_inventory_row(row)
+                entry = self.map_inventory_row(row, custom_fields=custom_fields)
+                if not dry_run:
+                    files = self.get_linked_files(row["substanceid"])
+
                 existing_fnames = set()
                 total += 1
                 if dry_run:
