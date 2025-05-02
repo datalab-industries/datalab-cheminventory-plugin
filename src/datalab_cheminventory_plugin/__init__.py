@@ -113,6 +113,36 @@ class ChemInventoryClient:
 
         return file_paths
 
+    def get_custom_fields(self) -> dict[str, str]:
+        """Returns a mapping from custom field names to cheminventory custom field
+        IDs (with the appropriate sf- or cf- prefix for substance or container fields,
+        respectively).
+        """
+        custom_fields: dict[str, str] = {}
+
+        resp = self.session.post(
+            f"{self.api_url}/customfields/get",
+            json={"authtoken": self.api_key, "inventory": self.inventory_number},
+        )
+
+        if resp.status_code != 200:
+            raise ValueError(f"Bad response from cheminventory: {resp.content}")
+
+        try:
+            json_resp = resp.json()
+        except Exception:
+            raise ValueError(f"Bad response from cheminventory: {resp.content}")
+
+        if json_resp["status"] != "success":
+            raise ValueError(f"Bad response from cheminventory: {resp.content}")
+
+        for field in json_resp["data"].get("container", []):
+            custom_fields[field["name"]] = f"cf-{field['id']}"
+        for field in json_resp["data"].get("substance", []):
+            custom_fields[field["name"]] = f"sf-{field['id']}"
+
+        return custom_fields
+
     @property
     def session(self) -> httpx.Client:
         if self._session is None:
