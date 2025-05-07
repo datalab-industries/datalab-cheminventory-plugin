@@ -64,7 +64,7 @@ wheels = [
 
 [[package]]
 name = "datalab-api"
-version = "0.2.11"
+version = "0.2.12"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "bokeh", marker = "sys_platform != 'emscripten'" },
@@ -72,9 +72,9 @@ dependencies = [
     { name = "numpy" },
     { name = "rich" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/5f/e1/f97dcf31c012e1647f483619205b0b6c6034eac19a24d8f9ad33c10b716c/datalab_api-0.2.11.tar.gz", hash = "sha256:13598506dbdbb57040d21537cd5f7695d8d66ac629b54cd426b04d8524275180", size = 19889 }
+sdist = { url = "https://files.pythonhosted.org/packages/24/88/e5e08145a6c52310ce85735659980afe4cc17e64ee2d995cd88fc51698a5/datalab_api-0.2.12.tar.gz", hash = "sha256:dcb765e213f56ff4f96c60da214171e125c96e4ebba439e4427e07469924f5c3", size = 20013 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ee/27/85b8888bb3d30cd84b8f8ec11badb6fc5bbdebaca43714bbe78a8edadf1a/datalab_api-0.2.11-py3-none-any.whl", hash = "sha256:afb2010119b2b00a895c6b09384e77a3b04907204e3e16867b8948daeef7a823", size = 16696 },
+    { url = "https://files.pythonhosted.org/packages/2c/83/2e10f2115c4f20a2078ecda665054d2ed2e591301e941146b7174f39ee23/datalab_api-0.2.12-py3-none-any.whl", hash = "sha256:ce95453656b1f63207f74f1ea0a2e2c4293478eb8d78b06a72142521a63d0abd", size = 16819 },
 ]
 
 [[package]]
@@ -93,7 +93,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "datalab-api", specifier = ">=0.2.11" },
+    { name = "datalab-api", specifier = ">=0.2.12" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=3,<5" },
     { name = "pytest", marker = "extra == 'dev'", specifier = "~=8.0" },
     { name = "respx", marker = "extra == 'dev'", specifier = "~=0.21" },
