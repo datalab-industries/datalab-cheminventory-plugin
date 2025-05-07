@@ -8,7 +8,7 @@ authors = [
 ]
 license = { text = "MIT" }
 requires-python = ">=3.10"
-dependencies = ["datalab-api ~= 0.2"]
+dependencies = ["datalab-api >= 0.2.11"]
 
 [project.scripts]
 datalab-cheminventory-sync = "datalab_cheminventory_plugin:_main"
