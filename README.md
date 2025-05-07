@@ -1,10 +1,10 @@
-# datalab-cheminventory-plugin
+# <div align="center"><i>datalab</i> ChemInventory Plugin</div>
 
-A plugin that enables syncing between datalab instances and [cheminventory.net](https://www.cheminventory.net/).
+A plugin that enables two-way syncing between *datalab* instances and [cheminventory.net](https://www.cheminventory.net/).
 
 ## Installation
 
-This plugin is still under development. Install using [`uv`](https://astral.sh/uv), via:
+This plugin can be installed using [`uv`](https://astral.sh/uv), via:
 
 ```bash
 git clone git@github.com:datalab-industries/datalab-cheminventory-plugin
