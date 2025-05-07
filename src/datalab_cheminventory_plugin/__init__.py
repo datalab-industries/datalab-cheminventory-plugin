@@ -1,3 +1,4 @@
+import datetime
 import os
 import tempfile
 from importlib.metadata import version
@@ -12,6 +13,11 @@ from datalab_api import DatalabClient, DuplicateItemError
 from rich import print as pprint
 
 rich.traceback.install(show_locals=True)
+
+DEFAULT_LOCATION_NAME = "datalab"
+"""A custom location to use for 'virtual' samples that have
+been synced from datalab to cheminventory.
+"""
 
 __version__ = version("datalab-cheminventory-plugin")
 
@@ -149,6 +155,51 @@ class ChemInventoryClient:
             return httpx.Client(timeout=self.timeout)
         return self._session
 
+    def add_container_to_cheminventory(self, container: dict[str, Any]) -> None:
+        """Add a container to the cheminventory."""
+
+        resp = self.session.post(
+            f"{self.api_url}/container/add",
+            json={"authtoken": self.api_key, "data": [container]},
+        )
+
+        if resp.status_code != 200:
+            raise ValueError(f"Bad response from cheminventory: {resp.content}")
+
+        try:
+            json_resp = resp.json()
+        except Exception:
+            raise ValueError(f"Bad response from cheminventory: {resp.content}")
+
+        if json_resp["status"] != "success":
+            raise ValueError(f"Bad response from cheminventory: {resp.content}")
+
+    def map_datalab_entry_to_cheminventory_container(
+        self,
+        entry: dict[str, Any],
+        location_id: int,
+        substance_id: int | None,
+        custom_fields: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        """Map a datalab `starting_material` entry to a new cheminventory container."""
+        container: dict[str, str | int | None] = {}
+        container["name"] = entry.get("name")
+        if container["name"] is None:
+            container["name"] = "Unknown"
+
+        if custom_fields and "DataLab ID" in custom_fields:
+            # Get ID mapping of custom field for datalab ID
+            container[f"{custom_fields['DataLab ID']}"] = entry["refcode"]
+
+        if entry.get("date"):
+            container["dateacquired"] = datetime.datetime.fromisoformat(entry["date"]).strftime(
+                "%Y-%m-%d"
+            )
+
+        container["locationid"] = location_id
+        container["substanceid"] = substance_id
+        return container
+
     def map_inventory_row(
         self, row: dict[str, Any], custom_fields: dict[str, str] | None = None
     ) -> dict[str, Any]:
@@ -171,8 +222,8 @@ class ChemInventoryClient:
         starting_material["status"] = "disposed" if row["disposed"] == "1" else "available"
 
         if custom_fields:
-            if "Datalab ID" in custom_fields:
-                value = row.get(custom_fields["Datalab ID"])
+            if "DataLab ID" in custom_fields:
+                value = row.get(custom_fields["DataLab ID"])
                 if value:
                     starting_material["refcode"] = value
             if "Identifying #" in custom_fields:
@@ -186,11 +237,142 @@ class ChemInventoryClient:
 
         return starting_material
 
-    def sync_to_datalab(self, collection_id: str | None = None, dry_run: bool = True) -> None:
-        """Fetch inventory and upload to Datalab."""
+    def get_substance_id(self, name: str, cas: str | None) -> int:
+        if not cas:
+            cas = "N/A"
+        resp = self.session.post(
+            f"{self.api_url}/container/getsubstance",
+            json={"authtoken": self.api_key, "cas": cas, "name": name},
+        )
 
+        if resp.status_code != 200:
+            raise ValueError(f"Bad response from cheminventory: {resp.content}")
+
+        try:
+            json_resp = resp.json()
+        except Exception:
+            raise ValueError(f"Bad response from cheminventory: {resp.content}")
+
+        if json_resp["status"] != "success":
+            raise ValueError(f"Bad response from cheminventory: {resp.content}")
+
+        if len(json_resp["data"]) == 0:
+            raise ValueError("No substance found with CAS N/A and name Unknown.")
+
+        # Get the first substance IDs
+        return json_resp["data"][0]["id"]
+
+    def get_location_id(self, name: str | None) -> int:
+        if name is None:
+            name = DEFAULT_LOCATION_NAME
+
+        resp = self.session.post(f"{self.api_url}/location/load", json={"authtoken": self.api_key})
+
+        if resp.status_code != 200:
+            raise ValueError(f"Bad response from cheminventory: {resp.content}")
+
+        try:
+            json_resp = resp.json()
+        except Exception:
+            raise ValueError(f"Bad response from cheminventory: {resp.content}")
+
+        if json_resp["status"] != "success":
+            raise ValueError(f"Bad response from cheminventory: {resp.content}")
+
+        # Find virtual location called "datalab" in list
+        for location in json_resp["data"]:
+            if location["name"] == name:
+                return location["id"]
+
+        for location in json_resp["data"]:
+            if location["name"] == DEFAULT_LOCATION_NAME:
+                return location["id"]
+
+        raise ValueError(r"No location called {name!r} found in cheminventory.")
+
+    def sync_to_cheminventory(
+        self,
+        existing_ids_or_refcodes: set[str],
+        deleted_ids_or_refcodes: set[str],
+        dry_run: bool = True,
+    ) -> None:
+        """Fetch inventory and upload to cheminventory, syncing
+        only those items that have IDs that do not match the existing IDs.
+
+        Parameters:
+            existing_ids_or_refcodes: A set of item IDs that were already found in cheminventory.
+
+        """
+        # get datalab entries
+        custom_fields = self.get_custom_fields()
+
+        found: int = 0
+
+        with DatalabClient(self.datalab_api_url) as datalab_client:
+            datalab_inventory = datalab_client.get_items(item_type="starting_materials")
+            for entry in rich.progress.track(
+                datalab_inventory, description="Exporting datalab inventory to cheminventory"
+            ):
+                if (
+                    str(entry["item_id"]) not in existing_ids_or_refcodes
+                    and entry["refcode"] not in existing_ids_or_refcodes
+                    and str(entry["item_id"]) not in deleted_ids_or_refcodes
+                    and str(entry["refcode"]) not in deleted_ids_or_refcodes
+                ):
+                    found += 1
+                    if dry_run:
+                        pprint(entry)
+                    # map datalab entry to cheminventory container
+                    substance_id = None
+                    if not dry_run:
+                        substance_id = self.get_substance_id(entry["name"], entry.get("CAS"))
+                    location_id = self.get_location_id(entry.get("location"))
+                    container = self.map_datalab_entry_to_cheminventory_container(
+                        entry,
+                        custom_fields=custom_fields,
+                        location_id=location_id,
+                        substance_id=substance_id,
+                    )
+                    if not dry_run:
+                        # add container to cheminventory
+                        self.add_container_to_cheminventory(container)
+                        pprint(f"Added {container['name']} to cheminventory.")
+                    else:
+                        pprint(f"Would add {container['name']}/{entry['item_id']} to cheminventory")
+
+        pprint(f"[green]Found {found} items to add to cheminventory.[/green]")
+
+    def get_deleted_inventory_ids(self) -> set[str]:
+        resp = self.session.post(
+            f"{self.api_url}/inventorymanagement/deletedcontainers/get",
+            json={"authtoken": self.api_key},
+        )
+        if resp.status_code != 200:
+            raise ValueError(f"Bad response from cheminventory: {resp.content}")
+
+        try:
+            json_resp = resp.json()
+        except Exception:
+            raise ValueError(f"Bad response from cheminventory: {resp.content}")
+
+        if json_resp["status"] != "success":
+            raise ValueError(f"Bad response from cheminventory: {resp.content}")
+
+        return {str(d.get("id")) for d in json_resp["data"] if d.get("id") is not None}
+
+    def sync_to_datalab(
+        self, collection_id: str | None = None, dry_run: bool = True
+    ) -> tuple[set[str], set[str]]:
+        """Fetch inventory and upload to Datalab.
+
+        Returns:
+            A set of item IDs that were found in cheminventory.
+
+        """
         if dry_run:
             pprint("Dry run mode: no datalab items will be created.")
+
+        ids_found = set()
 
         with DatalabClient(self.datalab_api_url) as datalab_client:
             successes = 0
@@ -200,12 +382,19 @@ class ChemInventoryClient:
 
             custom_fields = self.get_custom_fields()
 
+            ids_deleted = self.get_deleted_inventory_ids()
+
             for row in rich.progress.track(
                 self.get_inventory(), description="Importing cheminventory"
             ):
                 entry = self.map_inventory_row(row, custom_fields=custom_fields)
+                files = []
                 if not dry_run:
                     files = self.get_linked_files(row["substanceid"])
+
+                ids_found.add(str(entry["item_id"]))
+                if entry.get("refcode"):
+                    ids_found.add(str(entry["refcode"]))
 
                 existing_fnames = set()
                 total += 1
@@ -281,6 +470,8 @@ class ChemInventoryClient:
             if dry_run:
                 pprint(f"\n[green]Found {total} items.[/green]")
 
+        return ids_found, ids_deleted
+
 
 def _main():
     import argparse
@@ -295,7 +486,12 @@ def _main():
     )
     args = parser.parse_args()
     client = ChemInventoryClient()
-    client.sync_to_datalab(dry_run=args.dry_run)
+    cheminventory_ids, cheminventory_deleted_ids = client.sync_to_datalab(dry_run=args.dry_run)
+    client.sync_to_cheminventory(
+        dry_run=args.dry_run,
+        existing_ids_or_refcodes=cheminventory_ids,
+        deleted_ids_or_refcodes=cheminventory_deleted_ids,
+    )
 
 
 if __name__ == "__main__":
