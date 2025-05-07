@@ -98,7 +98,7 @@ class ChemInventoryDatalabSyncer:
     @property
     def cheminventory(self) -> ChemInventoryAPI:
         """The cheminventory API wrapper, authenticated via
-        the `CHEMINVENTORY_AUTH_TOKEN` environment variable.
+        the `CHEMINVENTORY_API_KEY` environment variable.
 
         """
         if self._cheminventory is None:
@@ -289,6 +289,7 @@ class ChemInventoryDatalabSyncer:
                 "name": name,
                 "type": type_,
                 "field_type": field_type,
+                "scope": "inventory",  # Not documented but was required to get this to work
             },
         )
 
