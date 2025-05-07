@@ -25,23 +25,75 @@ been synced from datalab to cheminventory.
 
 
 class ChemInventoryDatalabSyncer:
+    """A class to sync cheminventory with functionality for syncing datalab
+    starting materials with cheminventory containers.
+
+    The entrypoint `.sync()` will first loop through the cheminventory and add
+    any missing items to datalab, where 'missing' is determined by:
+
+        - if a datalab `item_id` that matches the cheminventory `container_id`,
+        - if the cheminventory defines a `DataLab ID` custom field, then this
+          will be compared with the datalab `refcode`s.
+
+    Any SDS files will be downloaded from cheminventory and uploaded to datalab
+    as media blocks attached to the given entry.
+
+    The second part of the sync will loop through the datalab starting materials
+    and add any missing items to cheminventory, where 'missing' is determined by
+    the inverse of the above, plus:
+
+        - if the datalab item_id or refcode matches any ID in the cheminventory
+          'deleted containers' list. In this case, the datalab entry will be
+          preserved by default.
+        - if the datalab item_id matches a barcode in cheminventory, this will
+          not be synced (as it indicates that there may already be duplicates
+          between datalab and cheminventory).
+
+    datalab entries will be synced to cheminventory containers, with defined
+    substances if a CAS or name matches an existing substance, or a new
+    "unknown" substance if not.
+    Similarly, the cheminventory 'shelf' will be extracted from the datalab
+    `location`, but in the case that there is no match, a placeholder location
+    'datalab' will be used.
+
+    The sync is intended to be idempotent; running multiple times without any
+    changes in the source databases should lead to no changes.
+    This can be tested with `dry_run=True`.
+
+    """
+
     _cheminventory: ChemInventoryAPI | None = None
     datalab_api_url: str
     inventory_name: str
     inventory_number: int
+    dry_run: bool = False
 
-    def __init__(self, inventory: int = 0):
+    def __init__(self, dry_run: bool = False):
         datalab_api_url = os.getenv("DATALAB_API_URL")
         if datalab_api_url is None:
             raise ValueError("DATALAB_API_URL environment variable not set.")
-
         self.datalab_api_url = datalab_api_url
+
+        self.dry_run = dry_run
 
         self.inventory_number, self.inventory_name = self.cheminventory.initialize()
         pprint(f"Connected to ChemInventory: {self.inventory_name} ({self.inventory_number})")
 
+    def sync(self):
+        """Perform the two-way sync from cheminventory to datalab and back."""
+        cheminventory_ids, cheminventory_deleted_ids = self.sync_to_datalab(dry_run=self.dry_run)
+        self.sync_to_cheminventory(
+            dry_run=self.dry_run,
+            existing_ids_or_refcodes=cheminventory_ids,
+            deleted_ids_or_refcodes=cheminventory_deleted_ids,
+        )
+
     @property
     def cheminventory(self) -> ChemInventoryAPI:
+        """The cheminventory API wrapper, authenticated via
+        the `CHEMINVENTORY_AUTH_TOKEN` environment variable.
+
+        """
         if self._cheminventory is None:
             self._cheminventory = ChemInventoryAPI()
         return self._cheminventory
@@ -52,6 +104,11 @@ class ChemInventoryDatalabSyncer:
     def get_linked_files(
         self, substanceid: int, mimetypes: tuple[str] = ("application/pdf",)
     ) -> list[Path]:
+        """Find and download any linked files for a given substance ID.
+
+        Files will be downloaded to a temporary directory and their paths are
+        returned as a list.
+        """
         if substanceid is None:
             raise ValueError("No substanceid provided.")
 
@@ -135,6 +192,7 @@ class ChemInventoryDatalabSyncer:
     def map_inventory_row(
         self, row: dict[str, Any], custom_fields: dict[str, str] | None = None
     ) -> dict[str, Any]:
+        """Maps a cheminventory row to a datalab starting material entry."""
         starting_material: dict[str, str | int | None] = {}
         starting_material["item_id"] = str(row["id"])
         starting_material["Barcode"] = row["barcode"] or None
@@ -270,7 +328,11 @@ class ChemInventoryDatalabSyncer:
     def sync_to_datalab(
         self, collection_id: str | None = None, dry_run: bool = True
     ) -> tuple[set[str], set[str]]:
-        """Fetch inventory and upload to Datalab.
+        """Fetch inventory and upload to datalab, updating items that already exist.
+
+        Parameters:
+            collection_id: Put the synced items into the given collection.
+            dry_run: Whether to actually update datalab entries.
 
         Returns:
             A set of item IDs that were found in cheminventory.
@@ -302,6 +364,8 @@ class ChemInventoryDatalabSyncer:
                 ids_found.add(str(entry["item_id"]))
                 if entry.get("refcode"):
                     ids_found.add(str(entry["refcode"]))
+                if entry.get("barcode"):
+                    ids_found.add(str(entry["barcode"]))
 
                 existing_fnames = set()
                 total += 1
@@ -384,7 +448,7 @@ def _main():
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Sync from cheminventory to datalab.",
+        description="Sync from cheminventory to datalab and back.",
     )
     parser.add_argument(
         "--dry-run",
@@ -392,13 +456,8 @@ def _main():
         help="Do not create items in datalab.",
     )
     args = parser.parse_args()
-    syncer = ChemInventoryDatalabSyncer()
-    cheminventory_ids, cheminventory_deleted_ids = syncer.sync_to_datalab(dry_run=args.dry_run)
-    syncer.sync_to_cheminventory(
-        dry_run=args.dry_run,
-        existing_ids_or_refcodes=cheminventory_ids,
-        deleted_ids_or_refcodes=cheminventory_deleted_ids,
-    )
+    syncer = ChemInventoryDatalabSyncer(dry_run=args.dry_run)
+    syncer.sync()
 
 
 if __name__ == "__main__":
