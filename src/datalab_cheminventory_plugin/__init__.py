@@ -12,68 +12,42 @@ import rich.traceback
 from datalab_api import DatalabClient, DuplicateItemError
 from rich import print as pprint
 
+from ._api import ChemInventoryAPI
+
 rich.traceback.install(show_locals=True)
+
+__version__ = version("datalab-cheminventory-plugin")
 
 DEFAULT_LOCATION_NAME = "datalab"
 """A custom location to use for 'virtual' samples that have
 been synced from datalab to cheminventory.
 """
 
-__version__ = version("datalab-cheminventory-plugin")
 
-
-class ChemInventoryClient:
-    api_url: str = "https://app.cheminventory.net/api"
-    api_key: str | None = None
-    _session: httpx.Client | None = None
-    timeout: httpx.Timeout = httpx.Timeout(60.0, read=5.0)
+class ChemInventoryDatalabSyncer:
+    _cheminventory: ChemInventoryAPI | None = None
     datalab_api_url: str
+    inventory_name: str
+    inventory_number: int
 
-    def __init__(self, inventory: int = 0, api_key: str | None = None):
-        self.api_key = api_key
-        if api_key is None:
-            self.api_key = os.getenv("CHEMINVENTORY_API_KEY")
-
+    def __init__(self, inventory: int = 0):
         datalab_api_url = os.getenv("DATALAB_API_URL")
         if datalab_api_url is None:
             raise ValueError("DATALAB_API_URL environment variable not set.")
+
         self.datalab_api_url = datalab_api_url
 
-        resp = self.session.post(
-            f"{self.api_url}/general/getdetails", json={"authtoken": self.api_key}
-        )
-        if resp.status_code != 200:
-            raise ValueError(f"Bad response from cheminventory: {resp.content}")
-        try:
-            json_resp = resp.json()
-        except Exception:
-            raise ValueError(f"Bad response from cheminventory: {resp.content}")
-
-        if json_resp["status"] != "success":
-            raise ValueError(f"Bad response from cheminventory: {resp.content}")
-
-        self.inventory_number = json_resp["data"]["user"]["inventory"]
-        self.inventory_name = json_resp["data"]["user"]["inventoryname"]
+        self.inventory_number, self.inventory_name = self.cheminventory.initialize()
         pprint(f"Connected to ChemInventory: {self.inventory_name} ({self.inventory_number})")
 
+    @property
+    def cheminventory(self) -> ChemInventoryAPI:
+        if self._cheminventory is None:
+            self._cheminventory = ChemInventoryAPI()
+        return self._cheminventory
+
     def get_inventory(self) -> dict:
-        resp = self.session.post(
-            f"{self.api_url}/inventorymanagement/export", json={"authtoken": self.api_key}
-        )
-
-        if resp.status_code != 200:
-            raise ValueError(f"Bad response from cheminventory: {resp.content}")
-
-        try:
-            json_resp = resp.json()
-        except Exception:
-            raise ValueError(f"Bad response from cheminventory: {resp.content}")
-
-        if json_resp["status"] != "success":
-            raise ValueError(f"Bad response from cheminventory: {resp.content}")
-
-        inventory = json_resp["data"]["rows"]
-        return inventory
+        return self.cheminventory.post("/inventorymanagement/export")["rows"]
 
     def get_linked_files(
         self, substanceid: int, mimetypes: tuple[str] = ("application/pdf",)
@@ -82,31 +56,18 @@ class ChemInventoryClient:
             raise ValueError("No substanceid provided.")
 
         file_paths = []
-        resp = self.session.post(
-            f"{self.api_url}/filestore/getlinkedfiles",
-            json={"authtoken": self.api_key, "substanceid": substanceid},
-        )
-        file_ids: list[int] = []
-        if resp.status_code == 200 and (json_resp := resp.json())["status"] == "success":
-            if len(json_resp.get("data", [])) > 0:
-                file_ids = [
-                    entry["id"] for entry in json_resp["data"] if entry["mimetype"] in mimetypes
-                ]
+        file_ids = [
+            entry["id"]
+            for entry in self.cheminventory.post(
+                "/filestore/getlinkedfiles", body={"substanceid": substanceid}
+            )
+            if entry["mimetype"] in mimetypes
+        ]
 
         tmpdir_path = Path(tempfile.mkdtemp())
 
         for f in file_ids:
-            file_response = self.session.post(
-                f"{self.api_url}/filestore/download", json={"authtoken": self.api_key, "fileid": f}
-            )
-            if (
-                file_response.status_code == 200
-                and (json_resp := file_response.json())["status"] == "success"
-            ):
-                file_url = str(json_resp["data"])
-            else:
-                raise ValueError(f"Bad response from cheminventory: {file_response.content}")
-
+            file_url = str(self.cheminventory.post("/filestore/download", body={"fileid": f}))
             file_path = tmpdir_path / f"{f}.pdf"
 
             with httpx.stream("GET", file_url) as response:
@@ -126,53 +87,24 @@ class ChemInventoryClient:
         """
         custom_fields: dict[str, str] = {}
 
-        resp = self.session.post(
-            f"{self.api_url}/customfields/get",
-            json={"authtoken": self.api_key, "inventory": self.inventory_number},
+        fields = self.cheminventory.post(
+            "/customfields/get", body={"inventory": self.inventory_number}
         )
 
-        if resp.status_code != 200:
-            raise ValueError(f"Bad response from cheminventory: {resp.content}")
-
-        try:
-            json_resp = resp.json()
-        except Exception:
-            raise ValueError(f"Bad response from cheminventory: {resp.content}")
-
-        if json_resp["status"] != "success":
-            raise ValueError(f"Bad response from cheminventory: {resp.content}")
-
-        for field in json_resp["data"].get("container", []):
+        for field in fields.get("container", []):
             custom_fields[field["name"]] = f"cf-{field['id']}"
-        for field in json_resp["data"].get("substance", []):
+        for field in fields.get("substance", []):
             custom_fields[field["name"]] = f"sf-{field['id']}"
 
         return custom_fields
 
-    @property
-    def session(self) -> httpx.Client:
-        if self._session is None:
-            return httpx.Client(timeout=self.timeout)
-        return self._session
-
     def add_container_to_cheminventory(self, container: dict[str, Any]) -> None:
         """Add a container to the cheminventory."""
 
-        resp = self.session.post(
-            f"{self.api_url}/container/add",
-            json={"authtoken": self.api_key, "data": [container]},
+        self.cheminventory.post(
+            "/container/add",
+            body={"data": [container]},
         )
-
-        if resp.status_code != 200:
-            raise ValueError(f"Bad response from cheminventory: {resp.content}")
-
-        try:
-            json_resp = resp.json()
-        except Exception:
-            raise ValueError(f"Bad response from cheminventory: {resp.content}")
-
-        if json_resp["status"] != "success":
-            raise ValueError(f"Bad response from cheminventory: {resp.content}")
 
     def map_datalab_entry_to_cheminventory_container(
         self,
@@ -238,57 +170,45 @@ class ChemInventoryClient:
         return starting_material
 
     def get_substance_id(self, name: str, cas: str | None) -> int:
+        """Looks up the substance ID for a given name and (optional) CAS number,
+        returning the first matching ID.
+
+        """
         if not cas:
             cas = "N/A"
-        resp = self.session.post(
-            f"{self.api_url}/container/getsubstance",
-            json={"authtoken": self.api_key, "cas": cas, "name": name},
+
+        substances = self.cheminventory.post(
+            "/container/getsubstance", body={"cas": cas, "name": name}
         )
-
-        if resp.status_code != 200:
-            raise ValueError(f"Bad response from cheminventory: {resp.content}")
-
-        try:
-            json_resp = resp.json()
-        except Exception:
-            raise ValueError(f"Bad response from cheminventory: {resp.content}")
-
-        if json_resp["status"] != "success":
-            raise ValueError(f"Bad response from cheminventory: {resp.content}")
-
-        if len(json_resp["data"]) == 0:
-            raise ValueError("No substance found with CAS N/A and name Unknown.")
+        if not substances:
+            raise ValueError("No substance found with {cas=} and {name=}.")
 
         # Get the first substance IDs
-        return json_resp["data"][0]["id"]
+        return substances[0]["id"]
 
     def get_location_id(self, name: str | None) -> int:
+        """Looks for a location with the given name in cheminventory,
+        if missing, returns the ID of the default specified location in
+        `DEFAULT_LOCATION_NAME`.
+
+        """
         if name is None:
             name = DEFAULT_LOCATION_NAME
 
-        resp = self.session.post(f"{self.api_url}/location/load", json={"authtoken": self.api_key})
-
-        if resp.status_code != 200:
-            raise ValueError(f"Bad response from cheminventory: {resp.content}")
-
-        try:
-            json_resp = resp.json()
-        except Exception:
-            raise ValueError(f"Bad response from cheminventory: {resp.content}")
-
-        if json_resp["status"] != "success":
-            raise ValueError(f"Bad response from cheminventory: {resp.content}")
+        locations = self.cheminventory.post("/location/load")
 
         # Find virtual location called "datalab" in list
-        for location in json_resp["data"]:
+        for location in locations:
             if location["name"] == name:
                 return location["id"]
 
-        for location in json_resp["data"]:
+        for location in locations:
             if location["name"] == DEFAULT_LOCATION_NAME:
                 return location["id"]
 
-        raise ValueError(r"No location called {name!r} found in cheminventory.")
+        raise ValueError(
+            r"No location matching {name!r} or {DEFAULT_LOCATION_NAME!r} found in cheminventory."
+        )
 
     def sync_to_cheminventory(
         self,
@@ -343,22 +263,9 @@ class ChemInventoryClient:
         pprint(f"[green]Found {found} items to add to cheminventory.[/green]")
 
     def get_deleted_inventory_ids(self) -> set[str]:
-        resp = self.session.post(
-            f"{self.api_url}/inventorymanagement/deletedcontainers/get",
-            json={"authtoken": self.api_key},
-        )
-        if resp.status_code != 200:
-            raise ValueError(f"Bad response from cheminventory: {resp.content}")
-
-        try:
-            json_resp = resp.json()
-        except Exception:
-            raise ValueError(f"Bad response from cheminventory: {resp.content}")
-
-        if json_resp["status"] != "success":
-            raise ValueError(f"Bad response from cheminventory: {resp.content}")
-
-        return {str(d.get("id")) for d in json_resp["data"] if d.get("id") is not None}
+        """Returns a list of deleted inventory IDs from cheminventory."""
+        deleted_containers = self.cheminventory.post("/inventorymanagement/deletedcontainers/get")
+        return {str(d.get("id")) for d in deleted_containers if d.get("id") is not None}
 
     def sync_to_datalab(
         self, collection_id: str | None = None, dry_run: bool = True
@@ -485,9 +392,9 @@ def _main():
         help="Do not create items in datalab.",
     )
     args = parser.parse_args()
-    client = ChemInventoryClient()
-    cheminventory_ids, cheminventory_deleted_ids = client.sync_to_datalab(dry_run=args.dry_run)
-    client.sync_to_cheminventory(
+    syncer = ChemInventoryDatalabSyncer()
+    cheminventory_ids, cheminventory_deleted_ids = syncer.sync_to_datalab(dry_run=args.dry_run)
+    syncer.sync_to_cheminventory(
         dry_run=args.dry_run,
         existing_ids_or_refcodes=cheminventory_ids,
         deleted_ids_or_refcodes=cheminventory_deleted_ids,
