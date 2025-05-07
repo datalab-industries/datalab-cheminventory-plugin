@@ -4,7 +4,7 @@ import tempfile
 from importlib.metadata import version
 from pathlib import Path
 from re import A
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 import rich.progress
@@ -17,6 +17,11 @@ from ._api import ChemInventoryAPI
 rich.traceback.install(show_locals=True)
 
 __version__ = version("datalab-cheminventory-plugin")
+
+CUSTOM_ID_FIELD = "DataLab ID"
+"""The custom field name in cheminventory that will be used to store the
+immutable datalab refcode, where necessary.
+"""
 
 DEFAULT_LOCATION_NAME = "datalab"
 """A custom location to use for 'virtual' samples that have
@@ -32,8 +37,10 @@ class ChemInventoryDatalabSyncer:
     any missing items to datalab, where 'missing' is determined by:
 
         - if a datalab `item_id` that matches the cheminventory `container_id`,
-        - if the cheminventory defines a `DataLab ID` custom field, then this
-          will be compared with the datalab `refcode`s.
+        - if the cheminventory defines a `CUSTOM_ID_FIELD` (default:
+          `DataLab ID`)ustom field, then this will be compared with the datalab
+          `refcode`s. If it does not, this custom field will be defined for
+          future use.
 
     Any SDS files will be downloaded from cheminventory and uploaded to datalab
     as media blocks attached to the given entry.
@@ -91,7 +98,7 @@ class ChemInventoryDatalabSyncer:
     @property
     def cheminventory(self) -> ChemInventoryAPI:
         """The cheminventory API wrapper, authenticated via
-        the `CHEMINVENTORY_AUTH_TOKEN` environment variable.
+        the `CHEMINVENTORY_API_KEY` environment variable.
 
         """
         if self._cheminventory is None:
@@ -176,9 +183,9 @@ class ChemInventoryDatalabSyncer:
         if container["name"] is None:
             container["name"] = "Unknown"
 
-        if custom_fields and "DataLab ID" in custom_fields:
+        if custom_fields and CUSTOM_ID_FIELD in custom_fields:
             # Get ID mapping of custom field for datalab ID
-            container[f"{custom_fields['DataLab ID']}"] = entry["refcode"]
+            container[f"{custom_fields[CUSTOM_ID_FIELD]}"] = entry["refcode"]
 
         if entry.get("date"):
             container["dateacquired"] = datetime.datetime.fromisoformat(entry["date"]).strftime(
@@ -212,8 +219,8 @@ class ChemInventoryDatalabSyncer:
         starting_material["status"] = "disposed" if row["disposed"] == "1" else "available"
 
         if custom_fields:
-            if "DataLab ID" in custom_fields:
-                value = row.get(custom_fields["DataLab ID"])
+            if CUSTOM_ID_FIELD in custom_fields:
+                value = row.get(custom_fields[CUSTOM_ID_FIELD])
                 if value:
                     starting_material["refcode"] = value
             if "Identifying #" in custom_fields:
@@ -268,6 +275,24 @@ class ChemInventoryDatalabSyncer:
             r"No location matching {name!r} or {DEFAULT_LOCATION_NAME!r} found in cheminventory."
         )
 
+    def set_custom_field(
+        self,
+        name: str,
+        type_: Literal["text", "multilinetext", "number", "date", "url", "dropdown", "tags"],
+        field_type: Literal["container", "substance"] = "container",
+    ) -> None:
+        """Creates a custom field in cheminventory with the given name and type."""
+        self.cheminventory.post(
+            "/customfields/save",
+            body={
+                "id": 0,
+                "name": name,
+                "type": type_,
+                "field_type": field_type,
+                "scope": "inventory",  # Not documented but was required to get this to work
+            },
+        )
+
     def sync_to_cheminventory(
         self,
         existing_ids_or_refcodes: set[str],
@@ -281,11 +306,16 @@ class ChemInventoryDatalabSyncer:
             existing_ids_or_refcodes: A set of item IDs that were already found in cheminventory.
 
         """
-        # get datalab entries
+
+        # get the custom field definitions from cheminventory
         custom_fields = self.get_custom_fields()
+        if CUSTOM_ID_FIELD not in custom_fields:
+            self.set_custom_field(CUSTOM_ID_FIELD, "text", "container")
+            custom_fields = self.get_custom_fields()
 
         found: int = 0
 
+        # get datalab entries
         with DatalabClient(self.datalab_api_url) as datalab_client:
             datalab_inventory = datalab_client.get_items(item_type="starting_materials")
             for entry in rich.progress.track(
