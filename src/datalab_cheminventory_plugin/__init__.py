@@ -386,6 +386,8 @@ class ChemInventoryDatalabSyncer:
             for row in rich.progress.track(
                 self.get_inventory(), description="Importing cheminventory"
             ):
+                # Whether to skip this entry (due to a manual duplicate detection, or otherwise)
+                skip = False
                 entry = self.map_inventory_row(row, custom_fields=custom_fields)
                 files = []
                 if not dry_run:
@@ -394,6 +396,18 @@ class ChemInventoryDatalabSyncer:
                 ids_found.add(str(entry["item_id"]))
                 if entry.get("refcode"):
                     ids_found.add(str(entry["refcode"]))
+                    # Refcodes currently get dropped when making a new starting material,
+                    # so we need to manually check if it exists already
+                    # This should be an edge case, as only items originating from datalab in the first instance
+                    # will have this refcode available
+                    try:
+                        item = datalab_client.get_item(refcode=entry["refcode"])
+                        if item:
+                            skip = True
+                            print(f"Skipping entry {entry}")
+                    except Exception:
+                        pass
+
                 if entry.get("barcode"):
                     ids_found.add(str(entry["barcode"]))
 
@@ -404,6 +418,9 @@ class ChemInventoryDatalabSyncer:
                 else:
                     try:
                         try:
+                            if skip:
+                                raise DuplicateItemError("Already found this refcode")
+
                             datalab_client.create_item(
                                 entry["item_id"],
                                 entry["type"],
