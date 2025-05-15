@@ -288,7 +288,7 @@ class ChemInventoryDatalabSyncer:
                 "id": 0,
                 "name": name,
                 "type": type_,
-                "field_type": field_type,
+                "fieldtype": field_type,
                 "scope": "inventory",  # Not documented but was required to get this to work
             },
         )
@@ -310,8 +310,9 @@ class ChemInventoryDatalabSyncer:
         # get the custom field definitions from cheminventory
         custom_fields = self.get_custom_fields()
         if CUSTOM_ID_FIELD not in custom_fields:
-            self.set_custom_field(CUSTOM_ID_FIELD, "text", "container")
-            custom_fields = self.get_custom_fields()
+            if not dry_run:
+                self.set_custom_field(CUSTOM_ID_FIELD, "text", "container")
+                custom_fields = self.get_custom_fields()
 
         found: int = 0
 
