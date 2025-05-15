@@ -14,7 +14,7 @@ from rich import print as pprint
 
 from ._api import ChemInventoryAPI
 
-rich.traceback.install(show_locals=True)
+rich.traceback.install(show_locals=False)
 
 __version__ = version("datalab-cheminventory-plugin")
 
@@ -328,18 +328,19 @@ class ChemInventoryDatalabSyncer:
             ):
                 if (
                     str(entry["item_id"]) not in existing_ids_or_refcodes
-                    and entry["refcode"] not in existing_ids_or_refcodes
+                    and entry.get("refcode") not in existing_ids_or_refcodes
                     and str(entry["item_id"]) not in deleted_ids_or_refcodes
-                    and str(entry["refcode"]) not in deleted_ids_or_refcodes
+                    and entry.get("refcode") not in deleted_ids_or_refcodes
                 ):
                     found += 1
                     if dry_run:
                         pprint(entry)
                     # map datalab entry to cheminventory container
                     substance_id = None
+                    location_id: int = 1
                     if not dry_run:
                         substance_id = self.get_substance_id(entry["name"], entry.get("CAS"))
-                    location_id = self.get_location_id(entry.get("location"))
+                        location_id = self.get_location_id(entry.get("location"))
                     container = self.map_datalab_entry_to_cheminventory_container(
                         entry,
                         custom_fields=custom_fields,
@@ -396,14 +397,16 @@ class ChemInventoryDatalabSyncer:
                 if not dry_run:
                     files = self.get_linked_files(row["substanceid"])
 
+                # Accumulate cheminventory container IDs to avoid duplication
                 ids_found.add(str(entry["item_id"]))
+
+                # Refcodes currently get dropped when making a new starting material,
+                # so we need to manually check if it exists already
+                # This should be an edge case, as only items originating from datalab in the first instance
+                # will have this refcode available.
+                # If the refcode exists, then set the item ID from the refcode instead.
                 if entry.get("refcode"):
                     ids_found.add(str(entry["refcode"]))
-                    # Refcodes currently get dropped when making a new starting material,
-                    # so we need to manually check if it exists already
-                    # This should be an edge case, as only items originating from datalab in the first instance
-                    # will have this refcode available.
-                    # If the refcode exists, then set the item ID from the refcode instead.
                     try:
                         item = datalab_client.get_item(refcode=entry["refcode"])
                         if item:
@@ -412,8 +415,18 @@ class ChemInventoryDatalabSyncer:
                     except Exception:
                         pass
 
+                # In a previous life, cheminventory sync used barcodes or randomly created IDs when
+                # syncing to datalab. We need to also detect this scenario; i.e., if the item has a barcode,
+                # does it match an existing barcoded entry in datalab?
                 if entry.get("barcode"):
                     ids_found.add(str(entry["barcode"]))
+                    try:
+                        item = datalab_client.get_item(item_id=entry["barcode"])
+                        if item:
+                            entry["item_id"] = entry["barcode"]
+                            print(f"Skipping existing entry {entry['item_id']}")
+                    except Exception:
+                        pass
 
                 existing_fnames = set()
                 total += 1
