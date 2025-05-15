@@ -227,6 +227,10 @@ class ChemInventoryDatalabSyncer:
                 value = row.get(custom_fields["Identifying #"])
                 if value:
                     starting_material["description"] += f"\nIdentifying #: {value}"  # type: ignore
+            if "Lot Number" in custom_fields:
+                value = row.get(custom_fields["Lot Number"])
+                if value:
+                    starting_material["description"] += f"\nLot number: {value}"  # type: ignore
             if "Form type" in custom_fields:
                 value = row.get(custom_fields["Form type"])
                 if value:
