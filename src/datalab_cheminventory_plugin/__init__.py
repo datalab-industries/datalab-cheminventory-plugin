@@ -202,7 +202,7 @@ class ChemInventoryDatalabSyncer:
         """Maps a cheminventory row to a datalab starting material entry."""
         starting_material: dict[str, str | int | None] = {}
         starting_material["item_id"] = str(row["id"])
-        starting_material["Barcode"] = row["barcode"] or None
+        starting_material["barcode"] = row["barcode"] or None
         starting_material["Container Name"] = row["name"]
         starting_material["Container Size"] = row["size"]
         starting_material["Supplier"] = row["supplier"]
@@ -444,7 +444,7 @@ class ChemInventoryDatalabSyncer:
 
                             successes += 1
                             pprint(
-                                f"[green]✓\t{entry.get('item_id')}\t{entry.get('Barcode')}[/green]"
+                                f"[green]✓\t{entry.get('item_id')}\t{entry.get('barcode')}[/green]"
                             )
                         except DuplicateItemError:
                             # If the item already exists, pull it and see if it needs to be updated
@@ -464,7 +464,7 @@ class ChemInventoryDatalabSyncer:
                             updated += 1
                             existing_fnames = {f["original_name"] for f in existing_item["files"]}
                             pprint(
-                                f"[yellow]·\t{entry.get('item_id')}\t{entry.get('Barcode')}[/yellow]"
+                                f"[yellow]·\t{entry.get('item_id')}\t{entry.get('barcode')}[/yellow]"
                             )
 
                         if files:
@@ -483,13 +483,13 @@ class ChemInventoryDatalabSyncer:
                                         file_ids=file_id,
                                     )
                                     pprint(
-                                        f"[green]✓\tAdded file to {entry.get('item_id')}\t{entry.get('Barcode')}[/green]"
+                                        f"[green]✓\tAdded file to {entry.get('item_id')}\t{entry.get('barcode')}[/green]"
                                     )
 
                     except Exception as e:
                         failures += 1
                         pprint(
-                            f"[red]✗\t{entry.get('item_id')}\t{entry.get('Barcode')}:\n{e}[/red]"
+                            f"[red]✗\t{entry.get('item_id')}\t{entry.get('barcode')}:\n{e}[/red]"
                         )
 
             if not dry_run:
