@@ -75,20 +75,23 @@ class ChemInventoryDatalabSyncer:
     inventory_number: int
     dry_run: bool = False
 
-    def __init__(self, dry_run: bool = False):
+    def __init__(self, dry_run: bool = False, skip_files: bool = False) -> None:
         datalab_api_url = os.getenv("DATALAB_API_URL")
         if datalab_api_url is None:
             raise ValueError("DATALAB_API_URL environment variable not set.")
         self.datalab_api_url = datalab_api_url
 
         self.dry_run = dry_run
+        self.skip_files = skip_files
 
         self.inventory_number, self.inventory_name = self.cheminventory.initialize()
         pprint(f"Connected to ChemInventory: {self.inventory_name} ({self.inventory_number})")
 
     def sync(self):
         """Perform the two-way sync from cheminventory to datalab and back."""
-        cheminventory_ids, cheminventory_deleted_ids = self.sync_to_datalab(dry_run=self.dry_run)
+        cheminventory_ids, cheminventory_deleted_ids = self.sync_to_datalab(
+            dry_run=self.dry_run, skip_files=self.skip_files
+        )
         self.sync_to_cheminventory(
             dry_run=self.dry_run,
             existing_ids_or_refcodes=cheminventory_ids,
@@ -362,13 +365,14 @@ class ChemInventoryDatalabSyncer:
         return {str(d.get("id")) for d in deleted_containers if d.get("id") is not None}
 
     def sync_to_datalab(
-        self, collection_id: str | None = None, dry_run: bool = True
+        self, collection_id: str | None = None, dry_run: bool = True, skip_files: bool = False
     ) -> tuple[set[str], set[str]]:
         """Fetch inventory and upload to datalab, updating items that already exist.
 
         Parameters:
             collection_id: Put the synced items into the given collection.
             dry_run: Whether to actually update datalab entries.
+            skip_files: Whether to skip downloading files from cheminventory.
 
         Returns:
             A set of item IDs that were found in cheminventory.
@@ -395,7 +399,8 @@ class ChemInventoryDatalabSyncer:
                 entry = self.map_inventory_row(row, custom_fields=custom_fields)
                 files = []
                 if not dry_run:
-                    files = self.get_linked_files(row["substanceid"])
+                    if not skip_files:
+                        files = self.get_linked_files(row["substanceid"])
 
                 # Accumulate cheminventory container IDs to avoid duplication
                 ids_found.add(str(entry["item_id"]))
@@ -516,8 +521,13 @@ def _main():
         action="store_true",
         help="Do not create items in datalab.",
     )
+    parser.add_argument(
+        "--skip-files",
+        action="store_true",
+        help="Do not download files from cheminventory.",
+    )
     args = parser.parse_args()
-    syncer = ChemInventoryDatalabSyncer(dry_run=args.dry_run)
+    syncer = ChemInventoryDatalabSyncer(dry_run=args.dry_run, skip_files=args.skip_files)
     syncer.sync()
 
 
