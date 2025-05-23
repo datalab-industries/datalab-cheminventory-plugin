@@ -73,15 +73,26 @@ class ChemInventoryDatalabSyncer:
     datalab_api_url: str
     inventory_name: str
     inventory_number: int
-    dry_run: bool = False
 
-    def __init__(self, dry_run: bool = False, skip_files: bool = False) -> None:
+    dry_run: bool = False
+    """Whether to actually create items in datalab or cheminventory."""
+
+    c2d_only: bool = False
+    """Whether to only sync in one direction, from cheminventory to datalab."""
+
+    skip_files: bool = False
+    """Whether to skip downloading files from cheminventory."""
+
+    def __init__(
+        self, dry_run: bool = False, skip_files: bool = False, c2d_only: bool = False
+    ) -> None:
         datalab_api_url = os.getenv("DATALAB_API_URL")
         if datalab_api_url is None:
             raise ValueError("DATALAB_API_URL environment variable not set.")
         self.datalab_api_url = datalab_api_url
 
         self.dry_run = dry_run
+        self.c2d_only = c2d_only
         self.skip_files = skip_files
 
         self.inventory_number, self.inventory_name = self.cheminventory.initialize()
@@ -92,11 +103,12 @@ class ChemInventoryDatalabSyncer:
         cheminventory_ids, cheminventory_deleted_ids = self.sync_to_datalab(
             dry_run=self.dry_run, skip_files=self.skip_files
         )
-        self.sync_to_cheminventory(
-            dry_run=self.dry_run,
-            existing_ids_or_refcodes=cheminventory_ids,
-            deleted_ids_or_refcodes=cheminventory_deleted_ids,
-        )
+        if not self.c2d_only:
+            self.sync_to_cheminventory(
+                dry_run=self.dry_run,
+                existing_ids_or_refcodes=cheminventory_ids,
+                deleted_ids_or_refcodes=cheminventory_deleted_ids,
+            )
 
     @property
     def cheminventory(self) -> ChemInventoryAPI:
@@ -526,8 +538,15 @@ def _main():
         action="store_true",
         help="Do not download files from cheminventory.",
     )
+    parser.add_argument(
+        "--c2d-only",
+        action="store_true",
+        help="Only sync from cheminventory to datalab.",
+    )
     args = parser.parse_args()
-    syncer = ChemInventoryDatalabSyncer(dry_run=args.dry_run, skip_files=args.skip_files)
+    syncer = ChemInventoryDatalabSyncer(
+        dry_run=args.dry_run, skip_files=args.skip_files, c2d_only=args.c2d_only
+    )
     syncer.sync()
 
 
