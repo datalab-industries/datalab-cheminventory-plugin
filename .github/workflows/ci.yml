@@ -48,4 +48,4 @@ jobs:
       - uses: actions/checkout@v4
 
       - run: |
-          docker build -t datalab-cheminventory-plugin .
+          docker build -t ghcr.io/datalab-industries/datalab-cheminventory-plugin:dev .
