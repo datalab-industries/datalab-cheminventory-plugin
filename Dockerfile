@@ -1,5 +1,9 @@
 FROM debian:stable-slim AS base
 
+LABEL org.opencontainers.image.source=https://github.com/datalab-industries/datalab-cheminventory-plugin
+LABEL org.opencontainers.image.description="datalab-cheminventory plugin: for two-way sync between datalab and cheminventory.net"
+LABEL org.opencontainers.image.licenses=MIT
+
 COPY --from=ghcr.io/astral-sh/uv:0.6.4 /uv /usr/local/bin/uv
 ENV UV_LINK_MODE=copy \
     UV_COMPILE_BYTECODE=1 \
