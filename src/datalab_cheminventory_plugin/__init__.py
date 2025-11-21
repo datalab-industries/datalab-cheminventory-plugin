@@ -123,6 +123,9 @@ class ChemInventoryDatalabSyncer:
     def get_inventory(self) -> dict:
         return self.cheminventory.post("/inventorymanagement/export")["rows"]
 
+    def get_deleted_containers(self) -> dict:
+        return self.cheminventory.post("/inventorymanagement/deletedcontainers/get")
+
     def get_linked_files(
         self, substanceid: int, mimetypes: tuple[str] = ("application/pdf",)
     ) -> list[Path]:
@@ -405,9 +408,8 @@ class ChemInventoryDatalabSyncer:
 
             ids_deleted = self.get_deleted_inventory_ids()
 
-            for row in rich.progress.track(
-                self.get_inventory(), description="Importing cheminventory"
-            ):
+            inventory = self.get_inventory()
+            for row in rich.progress.track(inventory, description="Importing cheminventory"):
                 entry = self.map_inventory_row(row, custom_fields=custom_fields)
                 files = []
                 if not dry_run:
@@ -518,6 +520,49 @@ class ChemInventoryDatalabSyncer:
 
             if dry_run:
                 pprint(f"\n[green]Found {total} items.[/green]")
+
+            for row in rich.progress.track(
+                self.get_deleted_containers(), description="Checking deleted containers"
+            ):
+                # If the item already exists, pull it and see if it needs to be updated -- need to check both ID and barcode as before
+                container_id = row.get("id")
+                barcode = row.get("barcode")
+                existing_item = None
+                found_id = None
+                try:
+                    existing_item = datalab_client.get_item(barcode)
+                    found_id = barcode
+                except Exception:
+                    pass
+
+                if not existing_item:
+                    try:
+                        existing_item = datalab_client.get_item(container_id)
+                        found_id = container_id
+                    except Exception:
+                        pass
+
+                if existing_item and found_id:
+                    item_data = {"status": "disposed"}
+
+                    if not dry_run:
+                        try:
+                            response = datalab_client.update_item(
+                                found_id,
+                                item_data,
+                            )
+                        except Exception as e:
+                            pprint(f"[red]✗\tFailed to dispose datalab item {found_id}:\n{e}[/red]")
+                            continue
+
+                    pprint(
+                        f"[green]Disposed datalab item {container_id} as it was deleted in cheminventory.[/green]"
+                    )
+
+                else:
+                    pprint(
+                        f"[yellow]Could not find deleted container {container_id} in datalab.[/yellow]"
+                    )
 
         return ids_found, ids_deleted
 
