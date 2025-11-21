@@ -546,10 +546,14 @@ class ChemInventoryDatalabSyncer:
                     item_data = {"status": "disposed"}
 
                     if not dry_run:
-                        response = datalab_client.update_item(
-                            found_id,
-                            item_data,
-                        )
+                        try:
+                            response = datalab_client.update_item(
+                                found_id,
+                                item_data,
+                            )
+                        except Exception as e:
+                            pprint(f"[red]✗\tFailed to dispose datalab item {found_id}:\n{e}[/red]")
+                            continue
 
                     pprint(
                         f"[green]Disposed datalab item {container_id} as it was deleted in cheminventory.[/green]"
