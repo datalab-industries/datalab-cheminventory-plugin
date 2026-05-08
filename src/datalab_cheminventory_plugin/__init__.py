@@ -84,7 +84,11 @@ class ChemInventoryDatalabSyncer:
     """Whether to skip downloading files from cheminventory."""
 
     def __init__(
-        self, dry_run: bool = False, skip_files: bool = False, c2d_only: bool = False
+        self,
+        dry_run: bool = False,
+        skip_files: bool = False,
+        c2d_only: bool = False,
+        inventory_number: int | None = None,
     ) -> None:
         datalab_api_url = os.getenv("DATALAB_API_URL")
         if datalab_api_url is None:
@@ -94,8 +98,11 @@ class ChemInventoryDatalabSyncer:
         self.dry_run = dry_run
         self.c2d_only = c2d_only
         self.skip_files = skip_files
+        self._target_inventory = inventory_number
 
-        self.inventory_number, self.inventory_name = self.cheminventory.initialize()
+        self.inventory_number, self.inventory_name = self.cheminventory.initialize(
+            target_inventory=self._target_inventory
+        )
         pprint(f"Connected to ChemInventory: {self.inventory_name} ({self.inventory_number})")
 
     def sync(self):
@@ -567,30 +574,96 @@ class ChemInventoryDatalabSyncer:
         return ids_found, ids_deleted
 
 
+def _status(inventory_number: int | None = None) -> None:
+    """Print a summary of the connected cheminventory without contacting datalab."""
+    api = ChemInventoryAPI()
+    active, others = api.list_inventories()
+    pprint(f"[green]Default inventory:[/green] {active[1]} ({active[0]})")
+    if others:
+        pprint(f"[green]Other accessible inventories ({len(others)}):[/green]")
+        for inv_id, inv_name in others:
+            pprint(f"    {inv_name} ({inv_id})")
+
+    resolved_id, resolved_name = api.initialize(target_inventory=inventory_number)
+    pprint(f"\n[green]Querying:[/green] {resolved_name} ({resolved_id})")
+
+    inventory = api.post("/inventorymanagement/export")["rows"]
+    deleted = api.post("/inventorymanagement/deletedcontainers/get")
+
+    active_rows = [row for row in inventory if str(row.get("disposed", "0")) != "1"]
+    disposed = [row for row in inventory if str(row.get("disposed", "0")) == "1"]
+
+    locations: dict[str, int] = {}
+    for row in active_rows:
+        loc = row.get("location") or "(no location)"
+        locations[loc] = locations.get(loc, 0) + 1
+
+    pprint(
+        f"[green]Containers:[/green] {len(inventory)} total, "
+        f"{len(active_rows)} active, {len(disposed)} disposed"
+    )
+    pprint(f"[green]Deleted containers:[/green] {len(deleted)}")
+    pprint(f"[green]Active locations:[/green] {len(locations)}")
+    for loc, count in sorted(locations.items(), key=lambda kv: -kv[1])[:10]:
+        pprint(f"  {count:>5}  {loc}")
+
+
 def _main():
     import argparse
 
     parser = argparse.ArgumentParser(
         description="Sync from cheminventory to datalab and back.",
     )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Do not create items in datalab.",
+    subparsers = parser.add_subparsers(dest="command")
+
+    sync_parser = subparsers.add_parser(
+        "sync", help="Sync between cheminventory and datalab (default)."
     )
-    parser.add_argument(
-        "--skip-files",
-        action="store_true",
-        help="Do not download files from cheminventory.",
+    for p in (parser, sync_parser):
+        p.add_argument(
+            "--dry-run",
+            action="store_true",
+            help="Do not create items in datalab.",
+        )
+        p.add_argument(
+            "--skip-files",
+            action="store_true",
+            help="Do not download files from cheminventory.",
+        )
+        p.add_argument(
+            "--c2d-only",
+            action="store_true",
+            help="Only sync from cheminventory to datalab.",
+        )
+
+    status_parser = subparsers.add_parser(
+        "status",
+        help="Print a summary of the connected cheminventory (no datalab connection required).",
     )
-    parser.add_argument(
-        "--c2d-only",
-        action="store_true",
-        help="Only sync from cheminventory to datalab.",
-    )
+
+    env_inventory = os.getenv("CHEMINVENTORY_INVENTORY_ID")
+    env_inventory_default = int(env_inventory) if env_inventory else None
+    for p in (parser, sync_parser, status_parser):
+        p.add_argument(
+            "--inventory",
+            type=int,
+            default=env_inventory_default,
+            help="Numeric cheminventory inventory ID to operate on. Validated against "
+            "the API key's accessible inventories. Defaults to the user's active "
+            "inventory, or $CHEMINVENTORY_INVENTORY_ID if set.",
+        )
+
     args = parser.parse_args()
+
+    if args.command == "status":
+        _status(inventory_number=args.inventory)
+        return
+
     syncer = ChemInventoryDatalabSyncer(
-        dry_run=args.dry_run, skip_files=args.skip_files, c2d_only=args.c2d_only
+        dry_run=args.dry_run,
+        skip_files=args.skip_files,
+        c2d_only=args.c2d_only,
+        inventory_number=args.inventory,
     )
     syncer.sync()
 
