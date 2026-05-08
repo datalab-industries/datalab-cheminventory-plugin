@@ -15,21 +15,80 @@ class ChemInventoryAPI:
     timeout: httpx.Timeout = httpx.Timeout(60.0, read=5.0)
     user_agent = f"datalab-cheminventory-plugin/{version('datalab-cheminventory-plugin')}"
     _session: httpx.Client | None = None
+    inventory_number: int | None = None
 
-    def __init__(self):
+    def __init__(self, inventory_number: int | None = None):
         self.api_url = CHEMINVENTORY_API_URL
         self.auth_token = os.getenv("CHEMINVENTORY_API_KEY")
         if self.auth_token is None:
             raise ValueError("CHEMINVENTORY_API_KEY environment variable not set.")
+        self.inventory_number = inventory_number
 
-    def initialize(self) -> tuple[int, str]:
-        """Initialises API connection and returns the connected
-        inventory number and name.
+    def initialize(self, target_inventory: int | None = None) -> tuple[int, str]:
+        """Initialises the API connection.
+
+        If `target_inventory` (or one set on the instance) is provided, validates
+        that the API key has access to it (via `user.inventory` and
+        `user.otherInventories` in `/general/getdetails`) and switches the
+        server-side active inventory via `/navbar/switchinventory` so that
+        subsequent endpoints (which mostly do not accept an explicit `inventory`
+        body parameter) operate on that inventory. Otherwise, the user's
+        currently-active inventory is used as-is.
+
+        Returns the resolved inventory number and name.
         """
-        details = self.post("/general/getdetails")
-        inventory_number = details["user"]["inventory"]
-        inventory_name = details["user"]["inventoryname"]
-        return inventory_number, inventory_name
+        # Fetch unscoped so the response enumerates all accessible inventories.
+        previous, self.inventory_number = self.inventory_number, None
+        try:
+            details = self.post("/general/getdetails")
+        finally:
+            self.inventory_number = previous
+        user = details["user"]
+        default_id = int(user["inventory"])
+        default_name = user["inventoryname"]
+        others = {
+            int(o["inventory"]): o.get("name", "?")
+            for o in user.get("otherInventories", [])
+            if o.get("inventory") is not None
+        }
+
+        target = target_inventory if target_inventory is not None else self.inventory_number
+        if target is None:
+            self.inventory_number = default_id
+            return default_id, default_name
+
+        target = int(target)
+        accessible = {default_id: default_name, **others}
+        if target not in accessible:
+            raise ValueError(
+                f"Inventory {target} is not accessible by this API key. "
+                f"Accessible inventories: {accessible}"
+            )
+
+        if target != default_id:
+            # Server-side switch is required: most endpoints (e.g. /inventorymanagement/export)
+            # ignore an `inventory` body parameter and always operate on the user's currently
+            # active inventory. /navbar/switchinventory changes that active inventory.
+            self.post("/navbar/switchinventory", body={"newinventory": target})
+
+        self.inventory_number = target
+        return target, accessible[target]
+
+    def list_inventories(self) -> tuple[tuple[int, str], list[tuple[int, str]]]:
+        """Returns ((active_id, active_name), [(other_id, other_name), ...])."""
+        previous, self.inventory_number = self.inventory_number, None
+        try:
+            details = self.post("/general/getdetails")
+        finally:
+            self.inventory_number = previous
+        user = details["user"]
+        active = (int(user["inventory"]), user["inventoryname"])
+        others = [
+            (int(o["inventory"]), o.get("name", "?"))
+            for o in user.get("otherInventories", [])
+            if o.get("inventory") is not None
+        ]
+        return active, others
 
     @property
     def session(self) -> httpx.Client:
@@ -43,9 +102,10 @@ class ChemInventoryAPI:
 
     @property
     def auth_body(self):
-        return {
-            "authtoken": self.auth_token,
-        }
+        body = {"authtoken": self.auth_token}
+        if self.inventory_number is not None:
+            body["inventory"] = self.inventory_number
+        return body
 
     @property
     def headers(self):
