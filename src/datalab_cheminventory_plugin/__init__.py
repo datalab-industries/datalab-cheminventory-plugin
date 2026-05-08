@@ -587,6 +587,15 @@ def _status(inventory_number: int | None = None) -> None:
     resolved_id, resolved_name = api.initialize(target_inventory=inventory_number)
     pprint(f"\n[green]Querying:[/green] {resolved_name} ({resolved_id})")
 
+    if inventory_number is not None and others:
+        pprint(
+            "[bold yellow]WARNING:[/bold yellow] this API key has access to multiple "
+            f"inventories and the active one is now {resolved_name} ({resolved_id}) "
+            "account-wide. Any concurrent client sharing this API key may flip the "
+            "active inventory and cause cross-inventory data leakage. Ensure only one "
+            "process uses this key at a time, or request per-inventory API keys."
+        )
+
     inventory = api.post("/inventorymanagement/export")["rows"]
     deleted = api.post("/inventorymanagement/deletedcontainers/get")
 

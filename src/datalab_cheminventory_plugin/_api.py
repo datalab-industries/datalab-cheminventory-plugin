@@ -65,6 +65,18 @@ class ChemInventoryAPI:
                 f"Accessible inventories: {accessible}"
             )
 
+        if len(accessible) > 1:
+            import warnings
+
+            warnings.warn(
+                f"This cheminventory API key has access to {len(accessible)} inventories "
+                f"({sorted(accessible)}); the chosen inventory ({target}, {accessible[target]}) "
+                "is account-wide server-side state. Any concurrent client sharing this API key "
+                "may flip the active inventory mid-sync and cause cross-talk. Ensure only one "
+                "process uses this key at a time, or request per-inventory API keys.",
+                stacklevel=2,
+            )
+
         if target != default_id:
             # Server-side switch is required: most endpoints (e.g. /inventorymanagement/export)
             # ignore an `inventory` body parameter and always operate on the user's currently
