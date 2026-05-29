@@ -133,19 +133,13 @@ class ChemInventoryDatalabSyncer:
     def get_deleted_containers(self) -> dict:
         return self.cheminventory.post("/inventorymanagement/deletedcontainers/get")
 
-    def get_linked_files(
+    def list_linked_file_ids(
         self, substanceid: int, mimetypes: tuple[str] = ("application/pdf",)
-    ) -> list[Path]:
-        """Find and download any linked files for a given substance ID.
-
-        Files will be downloaded to a temporary directory and their paths are
-        returned as a list.
-        """
+    ) -> list[int]:
+        """List linked file IDs for a substance, filtered by mimetype, without downloading."""
         if substanceid is None:
             raise ValueError("No substanceid provided.")
-
-        file_paths = []
-        file_ids = [
+        return [
             entry["id"]
             for entry in self.cheminventory.post(
                 "/filestore/getlinkedfiles", body={"substanceid": substanceid}
@@ -153,21 +147,18 @@ class ChemInventoryDatalabSyncer:
             if entry["mimetype"] in mimetypes
         ]
 
-        tmpdir_path = Path(tempfile.mkdtemp())
-
-        for f in file_ids:
-            file_url = str(self.cheminventory.post("/filestore/download", body={"fileid": f}))
-            file_path = tmpdir_path / f"{f}.pdf"
-
-            with httpx.stream("GET", file_url) as response:
-                with open(file_path, "wb") as file:
-                    for chunk in response.iter_bytes():
-                        file.write(chunk)
-                file_paths.append(file_path)
-
-            pprint(f"Downloaded file {f}.pdf to {tmpdir_path}")
-
-        return file_paths
+    def download_file(self, file_id: int, dest_dir: Path | None = None) -> Path:
+        """Download a single linked file to `dest_dir` (or a fresh tmpdir) as `<file_id>.pdf`."""
+        if dest_dir is None:
+            dest_dir = Path(tempfile.mkdtemp())
+        file_url = str(self.cheminventory.post("/filestore/download", body={"fileid": file_id}))
+        file_path = dest_dir / f"{file_id}.pdf"
+        with httpx.stream("GET", file_url) as response:
+            with open(file_path, "wb") as file:
+                for chunk in response.iter_bytes():
+                    file.write(chunk)
+        pprint(f"Downloaded file {file_id}.pdf to {dest_dir}")
+        return file_path
 
     def get_custom_fields(self) -> dict[str, str]:
         """Returns a mapping from custom field names to cheminventory custom field
@@ -418,10 +409,9 @@ class ChemInventoryDatalabSyncer:
             inventory = self.get_inventory()
             for row in rich.progress.track(inventory, description="Importing cheminventory"):
                 entry = self.map_inventory_row(row, custom_fields=custom_fields)
-                files = []
-                if not dry_run:
-                    if not skip_files:
-                        files = self.get_linked_files(row["substanceid"])
+                file_ids: list[int] = []
+                if not dry_run and not skip_files:
+                    file_ids = self.list_linked_file_ids(row["substanceid"])
 
                 # Accumulate cheminventory container IDs to avoid duplication
                 ids_found.add(str(entry["item_id"]))
@@ -493,24 +483,20 @@ class ChemInventoryDatalabSyncer:
                                 f"[yellow]·\t{entry.get('item_id')}\t{entry.get('barcode')}[/yellow]"
                             )
 
-                        if files:
-                            new_fnames = {f.name for f in files}
-                            update_file_set = new_fnames - existing_fnames
-                            for f in files:
-                                if f.name in update_file_set:
-                                    file_resp = datalab_client.upload_file(
-                                        entry["item_id"],
-                                        f,
-                                    )
-                                    file_id = file_resp["file_id"]
-                                    datalab_client.create_data_block(
-                                        item_id=entry["item_id"],
-                                        block_type="media",
-                                        file_ids=file_id,
-                                    )
-                                    pprint(
-                                        f"[green]✓\tAdded file to {entry.get('item_id')}\t{entry.get('barcode')}[/green]"
-                                    )
+                        ids_to_download = [
+                            fid for fid in file_ids if f"{fid}.pdf" not in existing_fnames
+                        ]
+                        for fid in ids_to_download:
+                            f = self.download_file(fid)
+                            file_resp = datalab_client.upload_file(entry["item_id"], f)
+                            datalab_client.create_data_block(
+                                item_id=entry["item_id"],
+                                block_type="media",
+                                file_ids=file_resp["file_id"],
+                            )
+                            pprint(
+                                f"[green]✓\tAdded file to {entry.get('item_id')}\t{entry.get('barcode')}[/green]"
+                            )
 
                     except Exception as e:
                         failures += 1
