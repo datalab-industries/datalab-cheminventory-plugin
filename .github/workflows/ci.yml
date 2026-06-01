@@ -29,7 +29,7 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@v6
         with:
-          version: "0.6.x"
+          version: "0.11.8"
           enable-cache: true
 
       - name: Install dependencies
@@ -39,3 +39,7 @@ jobs:
       - name: Run pre-commit
         run: |
           uv run pre-commit run --all-files --show-diff-on-failure
+
+      - name: Run pytest
+        run: |
+          uv run pytest --cov=src/datalab_cheminventory_plugin --cov-report=term --cov-report=xml -vvv
