@@ -280,7 +280,9 @@ class ChemInventoryDatalabSyncer:
         `_locations` attribute to a list of dicts with `id`, `name`, and `full_name` keys.
 
         """
-        locations: list[dict] = self.cheminventory.post("/location/load")
+        # This should be the only API route that returns a list directory under `data`,
+        # so lets ignore the type hint for clarity elsewhere
+        locations: list[dict] = self.cheminventory.post("/location/load")  # type: ignore
 
         id_to_location = {loc["id"]: loc for loc in locations}
 
