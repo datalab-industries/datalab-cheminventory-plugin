@@ -83,6 +83,9 @@ class ChemInventoryDatalabSyncer:
     skip_files: bool = False
     """Whether to skip downloading files from cheminventory."""
 
+    _locations: list[dict[str, Any]] | None = None
+    """Cache of cheminventory locations, to avoid repeated API calls."""
+
     def __init__(
         self,
         dry_run: bool = False,
@@ -271,28 +274,63 @@ class ChemInventoryDatalabSyncer:
         # Get the first substance IDs
         return substances[0]["id"]
 
-    def get_location_id(self, name: str | None) -> int:
+    def construct_locations_hierarchy(self) -> None:
+        """Loop through any configured locations and flatten the list of names
+        to match what is returned by the inventory export, setting the
+        `_locations` attribute to a list of dicts with `id`, `name`, and `full_name` keys.
+
+        """
+        locations: list[dict] = self.cheminventory.post("/location/load")
+
+        id_to_location = {loc["id"]: loc for loc in locations}
+
+        def _resolve_parents(loc, locations_by_id):
+            if loc.get("parent") in (None, 0):
+                return loc["name"]
+
+            parent = locations_by_id.get(loc["parent"])
+            if not parent:
+                raise RuntimeError(
+                    f"Location {loc['name']} has parent ID {loc['parent']} which was not found in the locations list."
+                )
+
+            return f"{_resolve_parents(parent, locations_by_id)} > {loc['name']}"
+
+        for ind, loc in enumerate(locations):
+            locations[ind]["full_name"] = _resolve_parents(loc, id_to_location) or loc["name"]
+
+        self._locations = locations
+
+    def get_location_id(self, name: str | None, use_default: bool = False) -> int:
         """Looks for a location with the given name in cheminventory,
         if missing, returns the ID of the default specified location in
         `DEFAULT_LOCATION_NAME`.
 
+        Parameters:
+            use_default: Whether to return the default location ID if no match is found.
+
         """
         if name is None:
             name = DEFAULT_LOCATION_NAME
+        else:
+            # Strip leading inventory name from location, since cheminventory exports locations as "Inventory > Location"
+            name = ">".join(name.split(">")[1:]).strip()
 
-        locations = self.cheminventory.post("/location/load")
+        if self._locations is None:
+            self.construct_locations_hierarchy()
 
         # Find virtual location called "datalab" in list
-        for location in locations:
-            if location["name"] == name:
+        for location in self._locations:  # type: ignore
+            if location["full_name"] == name:
                 return location["id"]
 
-        for location in locations:
-            if location["name"] == DEFAULT_LOCATION_NAME:
-                return location["id"]
+        if use_default:
+            for location in self._locations:  # type: ignore
+                if location["full_name"] == DEFAULT_LOCATION_NAME:
+                    return location["id"]
 
         raise ValueError(
-            r"No location matching {name!r} or {DEFAULT_LOCATION_NAME!r} found in cheminventory."
+            f"No location matching {name!r} or {DEFAULT_LOCATION_NAME!r} found in cheminventory."
         )
 
     def set_custom_field(
@@ -349,14 +387,21 @@ class ChemInventoryDatalabSyncer:
                     and entry.get("refcode") not in deleted_ids_or_refcodes
                 ):
                     found += 1
-                    if dry_run:
-                        pprint(entry)
                     # map datalab entry to cheminventory container
                     substance_id = None
                     location_id: int = 1
                     if not dry_run:
                         substance_id = self.get_substance_id(entry["name"], entry.get("CAS"))
+
+                    try:
                         location_id = self.get_location_id(entry.get("location"))
+                    except ValueError:
+                        pprint(
+                            f"Skipping {entry['name']}/{entry['item_id']} as location {entry.get('location')} not found in cheminventory."
+                        )
+                        found -= 1
+                        continue
+
                     container = self.map_datalab_entry_to_cheminventory_container(
                         entry,
                         custom_fields=custom_fields,
@@ -368,6 +413,7 @@ class ChemInventoryDatalabSyncer:
                         self.add_container_to_cheminventory(container)
                         pprint(f"Added {container['name']} to cheminventory.")
                     else:
+                        pprint(entry)
                         pprint(f"Would add {container['name']}/{entry['item_id']} to cheminventory")
 
         pprint(f"[green]Found {found} items to add to cheminventory.[/green]")
@@ -427,7 +473,6 @@ class ChemInventoryDatalabSyncer:
                         item = datalab_client.get_item(refcode=entry["refcode"])
                         if item:
                             entry["item_id"] = entry["refcode"].split(":")[1]
-                            print(f"Skipping existing entry {entry['item_id']}")
                     except Exception:
                         pass
 
@@ -440,14 +485,13 @@ class ChemInventoryDatalabSyncer:
                         item = datalab_client.get_item(item_id=entry["barcode"])
                         if item:
                             entry["item_id"] = entry["barcode"]
-                            print(f"Skipping existing entry {entry['item_id']}")
                     except Exception:
                         pass
 
                 existing_fnames = set()
                 total += 1
                 if dry_run:
-                    pprint(entry)
+                    pprint(f"[yellow]·\t{entry.get('item_id')}\t{entry.get('barcode')}[/yellow]")
                 else:
                     try:
                         try:
