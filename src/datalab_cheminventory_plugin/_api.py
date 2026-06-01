@@ -12,7 +12,7 @@ class ChemInventoryAPI:
     error handling, authentication and parsing of the JSON response.
     """
 
-    timeout: httpx.Timeout = httpx.Timeout(60.0, read=5.0)
+    timeout: httpx.Timeout = httpx.Timeout(60.0, read=120.0)
     user_agent = f"datalab-cheminventory-plugin/{version('datalab-cheminventory-plugin')}"
     _session: httpx.Client | None = None
     inventory_number: int | None = None
