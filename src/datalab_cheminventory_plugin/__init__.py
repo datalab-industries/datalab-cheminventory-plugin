@@ -156,7 +156,7 @@ class ChemInventoryDatalabSyncer:
             dest_dir = Path(tempfile.mkdtemp())
         file_url = str(self.cheminventory.post("/filestore/download", body={"fileid": file_id}))
         file_path = dest_dir / f"{file_id}.pdf"
-        with httpx.stream("GET", file_url) as response:
+        with httpx.stream("GET", file_url, timeout=self.cheminventory.timeout) as response:
             with open(file_path, "wb") as file:
                 for chunk in response.iter_bytes():
                     file.write(chunk)
