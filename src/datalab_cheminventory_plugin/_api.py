@@ -12,7 +12,7 @@ class ChemInventoryAPI:
     error handling, authentication and parsing of the JSON response.
     """
 
-    timeout: httpx.Timeout = httpx.Timeout(60.0, read=120.0)
+    timeout: httpx.Timeout = httpx.Timeout(60.0, read=180.0)
     user_agent = f"datalab-cheminventory-plugin/{version('datalab-cheminventory-plugin')}"
     _session: httpx.Client | None = None
     inventory_number: int | None = None
@@ -105,7 +105,7 @@ class ChemInventoryAPI:
     @property
     def session(self) -> httpx.Client:
         if self._session is None:
-            return httpx.Client(timeout=self.timeout)
+            self._session = httpx.Client(timeout=self.timeout)
         return self._session
 
     def __del__(self):
@@ -131,7 +131,7 @@ class ChemInventoryAPI:
         if body is None:
             body = {}
         url = f"{self.api_url.rstrip('/')}/{endpoint.lstrip('/')}"
-        response = httpx.post(url, json=self.auth_body | body, headers=self.headers)
+        response = self.session.post(url, json=self.auth_body | body, headers=self.headers)
         return response
 
     def post(
