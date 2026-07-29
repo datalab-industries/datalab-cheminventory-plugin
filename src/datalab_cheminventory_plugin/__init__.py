@@ -45,6 +45,12 @@ class ChemInventoryDatalabSyncer:
     Any SDS files will be downloaded from cheminventory and uploaded to datalab
     as media blocks attached to the given entry.
 
+    Disposal is synced in both directions: containers deleted in cheminventory
+    mark the corresponding datalab entry as disposed, and entries marked as
+    disposed in datalab cause their linked active container to be deleted in
+    cheminventory (cheminventory has no separate disposal concept; deleted
+    containers remain restorable from its deleted containers list).
+
     The second part of the sync will loop through the datalab starting materials
     and add any missing items to cheminventory, where 'missing' is determined by
     the inverse of the above, plus:
@@ -59,6 +65,9 @@ class ChemInventoryDatalabSyncer:
     datalab entries will be synced to cheminventory containers, with defined
     substances if a CAS or name matches an existing substance, or a new
     "unknown" substance if not.
+    The new container is labelled with the datalab item_id as its barcode,
+    so that a later deletion in cheminventory can be
+    matched back to the originating datalab entry and marked as disposed.
     Similarly, the cheminventory 'shelf' will be extracted from the datalab
     `location`, but in the case that there is no match, a placeholder location
     'datalab' will be used.
@@ -189,6 +198,16 @@ class ChemInventoryDatalabSyncer:
             body={"data": [container]},
         )
 
+    def delete_container_in_cheminventory(self, container_id: int | str) -> None:
+        """Delete a container in cheminventory; cheminventory has no separate
+        disposal concept, and deleted containers remain restorable via the
+        deleted containers list.
+        """
+        self.cheminventory.post(
+            "/container/delete",
+            body={"containerid": [int(container_id)]},
+        )
+
     def map_datalab_entry_to_cheminventory_container(
         self,
         entry: dict[str, Any],
@@ -205,6 +224,11 @@ class ChemInventoryDatalabSyncer:
         if custom_fields and CUSTOM_ID_FIELD in custom_fields:
             # Get ID mapping of custom field for datalab ID
             container[f"{custom_fields[CUSTOM_ID_FIELD]}"] = entry["refcode"]
+
+        # Label the container with the datalab item_id as its barcode, so that
+        # if it is later deleted in cheminventory it can be matched back to the
+        # originating datalab entry and marked as disposed there.
+        container["barcode"] = entry["item_id"]
 
         if entry.get("date"):
             container["dateacquired"] = datetime.datetime.fromisoformat(entry["date"]).strftime(
@@ -404,6 +428,13 @@ class ChemInventoryDatalabSyncer:
                         found -= 1
                         continue
 
+                    if entry["status"] == "disposed":
+                        pprint(
+                            f"Skipping {entry['name']}/{entry['item_id']} as it is marked as disposed in datalab."
+                        )
+                        found -= 1
+                        continue
+
                     container = self.map_datalab_entry_to_cheminventory_container(
                         entry,
                         custom_fields=custom_fields,
@@ -421,9 +452,21 @@ class ChemInventoryDatalabSyncer:
         pprint(f"[green]Found {found} items to add to cheminventory.[/green]")
 
     def get_deleted_inventory_ids(self) -> set[str]:
-        """Returns a list of deleted inventory IDs from cheminventory."""
+        """Returns the set of deleted container IDs and barcodes from cheminventory.
+
+        Barcodes are included as containers synced from datalab carry the
+        datalab item_id as their barcode, so this set can be checked against
+        both datalab item IDs and refcodes.
+
+        """
         deleted_containers = self.cheminventory.post("/inventorymanagement/deletedcontainers/get")
-        return {str(d.get("id")) for d in deleted_containers if d.get("id") is not None}
+        deleted_ids: set[str] = set()
+        for d in deleted_containers:
+            if d.get("id") is not None:
+                deleted_ids.add(str(d["id"]))
+            if d.get("barcode"):
+                deleted_ids.add(str(d["barcode"]))
+        return deleted_ids
 
     def sync_to_datalab(
         self, collection_id: str | None = None, dry_run: bool = True, skip_files: bool = False
@@ -448,6 +491,7 @@ class ChemInventoryDatalabSyncer:
             successes = 0
             failures = 0
             updated = 0
+            deleted = 0
             total = 0
 
             custom_fields = self.get_custom_fields()
@@ -474,7 +518,9 @@ class ChemInventoryDatalabSyncer:
                     try:
                         item = datalab_client.get_item(refcode=entry["refcode"])
                         if item:
-                            entry["item_id"] = entry["refcode"].split(":")[1]
+                            # Refcode suffixes are random and unrelated to the
+                            # item_id, so take the real item_id from the match
+                            entry["item_id"] = item["item_id"]
                     except Exception:
                         pass
 
@@ -516,6 +562,20 @@ class ChemInventoryDatalabSyncer:
                                     f"Item {entry['item_id']} already exists with type {existing_item['type']}, but we are trying to create it with type {entry['type']}."
                                 )
 
+                            # datalab disposal wins over an active cheminventory container:
+                            # delete the container (still restorable from the deleted
+                            # containers list) rather than reverting the datalab status
+                            if (
+                                existing_item.get("status") == "disposed"
+                                and entry["status"] != "disposed"
+                            ):
+                                self.delete_container_in_cheminventory(row["id"])
+                                deleted += 1
+                                pprint(
+                                    f"[green]✓\tDeleted container {row['id']} in cheminventory as {entry['item_id']} is disposed in datalab.[/green]"
+                                )
+                                continue
+
                             response = datalab_client.update_item(
                                 entry["item_id"],
                                 entry,
@@ -554,6 +614,10 @@ class ChemInventoryDatalabSyncer:
                 pprint(f"\n[green]Created {successes} items.[/green]")
                 if updated > 0:
                     pprint(f"[yellow]Updated {updated} items.[/yellow]")
+                if deleted > 0:
+                    pprint(
+                        f"[yellow]Deleted {deleted} containers in cheminventory that were disposed in datalab.[/yellow]"
+                    )
                 if failures > 0:
                     pprint(f"[red]Failed to create {failures} items.[/red]")
 
