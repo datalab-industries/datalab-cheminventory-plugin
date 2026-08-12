@@ -203,10 +203,11 @@ class ChemInventoryDatalabSyncer:
         disposal concept, and deleted containers remain restorable via the
         deleted containers list.
         """
-        self.cheminventory.post(
-            "/container/delete",
-            body={"containerid": [int(container_id)]},
-        )
+        if not self.c2d_only:
+            self.cheminventory.post(
+                "/container/delete",
+                body={"containerid": [int(container_id)]},
+            )
 
     def map_datalab_entry_to_cheminventory_container(
         self,
