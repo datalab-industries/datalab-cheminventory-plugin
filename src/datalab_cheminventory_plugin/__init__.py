@@ -619,13 +619,23 @@ class ChemInventoryDatalabSyncer:
                             if response["status"] != "success":
                                 raise RuntimeError(f"Failed to update item: {response['message']}")
 
-                            updated += 1
+                            unchanged = response.get("unchanged", False)
+
+                            if unchanged:
+                                LOGGER.debug(
+                                    "No changes to datalab item %s (barcode %s)",
+                                    entry.get("item_id"),
+                                    entry.get("barcode"),
+                                )
+                            else:
+                                updated += 1
+                                LOGGER.info(
+                                    "Updated datalab item %s (barcode %s)",
+                                    entry.get("item_id"),
+                                    entry.get("barcode"),
+                                )
+
                             existing_fnames = {f["original_name"] for f in existing_item["files"]}
-                            LOGGER.info(
-                                "Updated datalab item %s (barcode %s)",
-                                entry.get("item_id"),
-                                entry.get("barcode"),
-                            )
 
                         ids_to_download = [
                             fid for fid in file_ids if f"{fid}.pdf" not in existing_fnames
