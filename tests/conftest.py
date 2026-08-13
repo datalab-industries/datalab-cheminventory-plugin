@@ -134,6 +134,8 @@ class FakeDatalab:
     def __init__(self):
         self.items: dict[str, dict] = {}
         self._refcode_counter = 0
+        # The syncer stamps its own User-Agent onto the real client's headers
+        self.headers: dict[str, str] = {}
 
     def __call__(self, api_url, *args, **kwargs):
         return self
