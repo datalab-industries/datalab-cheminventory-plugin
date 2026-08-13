@@ -3,7 +3,6 @@ import os
 import tempfile
 from importlib.metadata import version
 from pathlib import Path
-from re import A
 from typing import Any, Literal
 
 import httpx
@@ -13,6 +12,7 @@ from datalab_api import DatalabClient, DuplicateItemError
 from rich import print as pprint
 
 from ._api import ChemInventoryAPI
+from ._logging import CONSOLE, DEFAULT_LOG_LEVEL, LOG_LEVEL_ENV_VAR, LOGGER, setup_logging
 
 rich.traceback.install(show_locals=False)
 
@@ -115,10 +115,18 @@ class ChemInventoryDatalabSyncer:
         self.inventory_number, self.inventory_name = self.cheminventory.initialize(
             target_inventory=self._target_inventory
         )
-        pprint(f"Connected to ChemInventory: {self.inventory_name} ({self.inventory_number})")
+        LOGGER.info(
+            "Connected to cheminventory inventory %r (%s)",
+            self.inventory_name,
+            self.inventory_number,
+        )
 
     def sync(self):
         """Perform the two-way sync from cheminventory to datalab and back."""
+        LOGGER.debug(
+            "Starting sync with %s",
+            f"{self.dry_run=}, {self.c2d_only=}, {self.skip_files=}",
+        )
         cheminventory_ids, cheminventory_deleted_ids = self.sync_to_datalab(
             dry_run=self.dry_run, skip_files=self.skip_files
         )
@@ -169,7 +177,7 @@ class ChemInventoryDatalabSyncer:
             with open(file_path, "wb") as file:
                 for chunk in response.iter_bytes():
                     file.write(chunk)
-        pprint(f"Downloaded file {file_id}.pdf to {dest_dir}")
+        LOGGER.debug("Downloaded file %s.pdf to %s", file_id, dest_dir)
         return file_path
 
     def get_custom_fields(self) -> dict[str, str]:
@@ -403,9 +411,13 @@ class ChemInventoryDatalabSyncer:
 
         # get datalab entries
         with DatalabClient(self.datalab_api_url) as datalab_client:
+            datalab_client.headers["User-Agent"] = self.cheminventory.user_agent
+
             datalab_inventory = datalab_client.get_items(item_type="starting_materials")
             for entry in rich.progress.track(
-                datalab_inventory, description="Exporting datalab inventory to cheminventory"
+                datalab_inventory,
+                description="Exporting datalab inventory to cheminventory",
+                console=CONSOLE,
             ):
                 if (
                     str(entry["item_id"]) not in existing_ids_or_refcodes
@@ -423,15 +435,20 @@ class ChemInventoryDatalabSyncer:
                     try:
                         location_id = self.get_location_id(entry.get("location"))
                     except ValueError:
-                        pprint(
-                            f"Skipping {entry['name']}/{entry['item_id']} as location {entry.get('location')} not found in cheminventory."
+                        LOGGER.warning(
+                            "Skipping %s/%s: location %r not found in cheminventory",
+                            entry["name"],
+                            entry["item_id"],
+                            entry.get("location"),
                         )
                         found -= 1
                         continue
 
                     if entry["status"] == "disposed":
-                        pprint(
-                            f"Skipping {entry['name']}/{entry['item_id']} as it is marked as disposed in datalab."
+                        LOGGER.debug(
+                            "Skipping %s/%s: marked as disposed in datalab",
+                            entry["name"],
+                            entry["item_id"],
                         )
                         found -= 1
                         continue
@@ -445,12 +462,20 @@ class ChemInventoryDatalabSyncer:
                     if not dry_run:
                         # add container to cheminventory
                         self.add_container_to_cheminventory(container)
-                        pprint(f"Added {container['name']} to cheminventory.")
+                        LOGGER.info(
+                            "Added container %r (%s) to cheminventory",
+                            container["name"],
+                            entry["item_id"],
+                        )
                     else:
-                        pprint(entry)
-                        pprint(f"Would add {container['name']}/{entry['item_id']} to cheminventory")
+                        LOGGER.info(
+                            "[dry run] Would add container %r (%s) to cheminventory",
+                            container["name"],
+                            entry["item_id"],
+                        )
+                        LOGGER.debug("[dry run] Full datalab entry: %s", entry)
 
-        pprint(f"[green]Found {found} items to add to cheminventory.[/green]")
+        LOGGER.info("Found %d datalab items to add to cheminventory", found)
 
     def get_deleted_inventory_ids(self) -> set[str]:
         """Returns the set of deleted container IDs and barcodes from cheminventory.
@@ -484,7 +509,7 @@ class ChemInventoryDatalabSyncer:
 
         """
         if dry_run:
-            pprint("Dry run mode: no datalab items will be created.")
+            LOGGER.info("Dry run: no datalab items will be created or updated")
 
         ids_found = set()
 
@@ -500,7 +525,9 @@ class ChemInventoryDatalabSyncer:
             ids_deleted = self.get_deleted_inventory_ids()
 
             inventory = self.get_inventory()
-            for row in rich.progress.track(inventory, description="Importing cheminventory"):
+            for row in rich.progress.track(
+                inventory, description="Importing cheminventory", console=CONSOLE
+            ):
                 entry = self.map_inventory_row(row, custom_fields=custom_fields)
                 file_ids: list[int] = []
                 if not dry_run and not skip_files:
@@ -540,7 +567,11 @@ class ChemInventoryDatalabSyncer:
                 existing_fnames = set()
                 total += 1
                 if dry_run:
-                    pprint(f"[yellow]·\t{entry.get('item_id')}\t{entry.get('barcode')}[/yellow]")
+                    LOGGER.debug(
+                        "[dry run] Would sync datalab item %s (barcode %s)",
+                        entry.get("item_id"),
+                        entry.get("barcode"),
+                    )
                 else:
                     try:
                         try:
@@ -552,8 +583,10 @@ class ChemInventoryDatalabSyncer:
                             )
 
                             successes += 1
-                            pprint(
-                                f"[green]✓\t{entry.get('item_id')}\t{entry.get('barcode')}[/green]"
+                            LOGGER.info(
+                                "Created datalab item %s (barcode %s)",
+                                entry.get("item_id"),
+                                entry.get("barcode"),
                             )
                         except DuplicateItemError:
                             # If the item already exists, pull it and see if it needs to be updated
@@ -572,8 +605,10 @@ class ChemInventoryDatalabSyncer:
                             ):
                                 self.delete_container_in_cheminventory(row["id"])
                                 deleted += 1
-                                pprint(
-                                    f"[green]✓\tDeleted container {row['id']} in cheminventory as {entry['item_id']} is disposed in datalab.[/green]"
+                                LOGGER.info(
+                                    "Deleted cheminventory container %s: datalab item %s is disposed",
+                                    row["id"],
+                                    entry["item_id"],
                                 )
                                 continue
 
@@ -586,8 +621,10 @@ class ChemInventoryDatalabSyncer:
 
                             updated += 1
                             existing_fnames = {f["original_name"] for f in existing_item["files"]}
-                            pprint(
-                                f"[yellow]·\t{entry.get('item_id')}\t{entry.get('barcode')}[/yellow]"
+                            LOGGER.info(
+                                "Updated datalab item %s (barcode %s)",
+                                entry.get("item_id"),
+                                entry.get("barcode"),
                             )
 
                         ids_to_download = [
@@ -601,32 +638,44 @@ class ChemInventoryDatalabSyncer:
                                 block_type="media",
                                 file_ids=file_resp["file_id"],
                             )
-                            pprint(
-                                f"[green]✓\tAdded file to {entry.get('item_id')}\t{entry.get('barcode')}[/green]"
+                            LOGGER.debug(
+                                "Attached file %s.pdf to datalab item %s (barcode %s)",
+                                fid,
+                                entry.get("item_id"),
+                                entry.get("barcode"),
                             )
 
                     except Exception as e:
                         failures += 1
-                        pprint(
-                            f"[red]✗\t{entry.get('item_id')}\t{entry.get('barcode')}:\n{e}[/red]"
+                        LOGGER.error(
+                            "Failed to sync datalab item %s (barcode %s): %s",
+                            entry.get("item_id"),
+                            entry.get("barcode"),
+                            e,
                         )
-
-            if not dry_run:
-                pprint(f"\n[green]Created {successes} items.[/green]")
-                if updated > 0:
-                    pprint(f"[yellow]Updated {updated} items.[/yellow]")
-                if deleted > 0:
-                    pprint(
-                        f"[yellow]Deleted {deleted} containers in cheminventory that were disposed in datalab.[/yellow]"
-                    )
-                if failures > 0:
-                    pprint(f"[red]Failed to create {failures} items.[/red]")
+                        LOGGER.debug("Traceback for %s", entry.get("item_id"), exc_info=True)
 
             if dry_run:
-                pprint(f"\n[green]Found {total} items.[/green]")
+                LOGGER.info("[dry run] Found %d cheminventory containers", total)
+            else:
+                LOGGER.info(
+                    "Synced %d cheminventory containers to datalab: "
+                    "%d created, %d updated, %d containers deleted, %d failed",
+                    total,
+                    successes,
+                    updated,
+                    deleted,
+                    failures,
+                )
+                if failures:
+                    LOGGER.warning("%d items failed to sync to datalab", failures)
 
+            disposals = 0
+            unmatched = 0
             for row in rich.progress.track(
-                self.get_deleted_containers(), description="Checking deleted containers"
+                self.get_deleted_containers(),
+                description="Checking deleted containers",
+                console=CONSOLE,
             ):
                 # If the item already exists, pull it and see if it needs to be updated -- need to check both ID and barcode as before
                 container_id = row.get("id")
@@ -647,6 +696,7 @@ class ChemInventoryDatalabSyncer:
                         pass
 
                 if existing_item and found_id:
+                    already_disposed = existing_item.get("status") == "disposed"
                     item_data = {"status": "disposed"}
 
                     if not dry_run:
@@ -656,23 +706,50 @@ class ChemInventoryDatalabSyncer:
                                 item_data,
                             )
                         except Exception as e:
-                            pprint(f"[red]✗\tFailed to dispose datalab item {found_id}:\n{e}[/red]")
+                            LOGGER.error("Failed to dispose datalab item %s: %s", found_id, e)
+                            LOGGER.debug("Traceback for %s", found_id, exc_info=True)
                             continue
 
-                    pprint(
-                        f"[green]Disposed datalab item {container_id} as it was deleted in cheminventory.[/green]"
-                    )
+                    if already_disposed:
+                        # Nothing actually changed, so keep this out of the INFO stream
+                        LOGGER.debug(
+                            "datalab item %s was already disposed (container %s)",
+                            found_id,
+                            container_id,
+                        )
+                    else:
+                        disposals += 1
+                        LOGGER.info(
+                            "%sDisposed datalab item %s: container %s was deleted in cheminventory",
+                            "[dry run] " if dry_run else "",
+                            found_id,
+                            container_id,
+                        )
 
                 else:
-                    pprint(
-                        f"[yellow]Could not find deleted container {container_id} in datalab.[/yellow]"
+                    unmatched += 1
+                    LOGGER.debug(
+                        "Deleted cheminventory container %s (barcode %s) has no datalab item",
+                        container_id,
+                        barcode,
                     )
+
+            LOGGER.info(
+                "Checked deleted cheminventory containers: %d datalab items disposed, "
+                "%d containers with no datalab item",
+                disposals,
+                unmatched,
+            )
 
         return ids_found, ids_deleted
 
 
 def _status(inventory_number: int | None = None) -> None:
-    """Print a summary of the connected cheminventory without contacting datalab."""
+    """Print a summary of the connected cheminventory without contacting datalab.
+
+    This is a report rather than a running process, so it is printed to stdout
+    directly; only the diagnostics around it go through the logger.
+    """
     api = ChemInventoryAPI()
     active, others = api.list_inventories()
     pprint(f"[green]Default inventory:[/green] {active[1]} ({active[0]})")
@@ -684,14 +761,8 @@ def _status(inventory_number: int | None = None) -> None:
     resolved_id, resolved_name = api.initialize(target_inventory=inventory_number)
     pprint(f"\n[green]Querying:[/green] {resolved_name} ({resolved_id})")
 
-    if inventory_number is not None and others:
-        pprint(
-            "[bold yellow]WARNING:[/bold yellow] this API key has access to multiple "
-            f"inventories and the active one is now {resolved_name} ({resolved_id}) "
-            "account-wide. Any concurrent client sharing this API key may flip the "
-            "active inventory and cause cross-inventory data leakage. Ensure only one "
-            "process uses this key at a time, or request per-inventory API keys."
-        )
+    # NB. the multi-inventory cross-talk warning is emitted by
+    # `ChemInventoryAPI.initialize` above, so is not repeated here.
 
     inventory = api.post("/inventorymanagement/export")["rows"]
     deleted = api.post("/inventorymanagement/deletedcontainers/get")
@@ -751,6 +822,21 @@ def _main():
     env_inventory_default = int(env_inventory) if env_inventory else None
     for p in (parser, sync_parser, status_parser):
         p.add_argument(
+            "--log-level",
+            type=str.upper,
+            default=None,
+            choices=("DEBUG", "INFO", "WARNING", "ERROR"),
+            help="Verbosity of the logs. INFO reports every change made to either database; "
+            "DEBUG additionally reports scanned items, file transfers and API calls. Defaults "
+            f"to ${LOG_LEVEL_ENV_VAR} if set, otherwise {DEFAULT_LOG_LEVEL}.",
+        )
+        p.add_argument(
+            "-v",
+            "--verbose",
+            action="store_true",
+            help="Shorthand for --log-level DEBUG.",
+        )
+        p.add_argument(
             "--inventory",
             type=int,
             default=env_inventory_default,
@@ -760,6 +846,8 @@ def _main():
         )
 
     args = parser.parse_args()
+
+    setup_logging("DEBUG" if args.verbose else args.log_level)
 
     if args.command == "status":
         _status(inventory_number=args.inventory)

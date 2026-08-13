@@ -4,6 +4,8 @@ from typing import Any
 
 import httpx
 
+from ._logging import LOGGER
+
 CHEMINVENTORY_API_URL = os.getenv("CHEMINVENTORY_API_URL", "https://app.cheminventory.net/api")
 
 
@@ -66,21 +68,29 @@ class ChemInventoryAPI:
             )
 
         if len(accessible) > 1:
-            import warnings
-
-            warnings.warn(
-                f"This cheminventory API key has access to {len(accessible)} inventories "
-                f"({sorted(accessible)}); the chosen inventory ({target}, {accessible[target]}) "
-                "is account-wide server-side state. Any concurrent client sharing this API key "
-                "may flip the active inventory mid-sync and cause cross-talk. Ensure only one "
-                "process uses this key at a time, or request per-inventory API keys.",
-                stacklevel=2,
+            LOGGER.warning(
+                "This cheminventory API key has access to %d inventories (%s); the chosen "
+                "inventory (%s, %s) is account-wide server-side state. Any concurrent client "
+                "sharing this API key may flip the active inventory mid-sync and cause "
+                "cross-talk. Ensure only one process uses this key at a time, or request "
+                "per-inventory API keys.",
+                len(accessible),
+                sorted(accessible),
+                target,
+                accessible[target],
             )
 
         if target != default_id:
             # Server-side switch is required: most endpoints (e.g. /inventorymanagement/export)
             # ignore an `inventory` body parameter and always operate on the user's currently
             # active inventory. /navbar/switchinventory changes that active inventory.
+            LOGGER.info(
+                "Switching account-wide active inventory from %s (%s) to %s (%s)",
+                default_id,
+                default_name,
+                target,
+                accessible[target],
+            )
             self.post("/navbar/switchinventory", body={"newinventory": target})
 
         self.inventory_number = target
@@ -131,7 +141,12 @@ class ChemInventoryAPI:
         if body is None:
             body = {}
         url = f"{self.api_url.rstrip('/')}/{endpoint.lstrip('/')}"
+        # Never log `auth_body`, which carries the API key
+        LOGGER.debug("POST %s with body keys %s", endpoint, sorted(body))
         response = self.session.post(url, json=self.auth_body | body, headers=self.headers)
+        LOGGER.debug(
+            "POST %s returned HTTP %s in %s", endpoint, response.status_code, response.elapsed
+        )
         return response
 
     def post(
