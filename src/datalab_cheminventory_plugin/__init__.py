@@ -273,7 +273,7 @@ class ChemInventoryDatalabSyncer:
         if custom_fields:
             if CUSTOM_ID_FIELD in custom_fields:
                 value = row.get(custom_fields[CUSTOM_ID_FIELD])
-                if value:
+                if value and value not in ("None", "N/A"):
                     starting_material["refcode"] = value
             if "Identifying #" in custom_fields:
                 value = row.get(custom_fields["Identifying #"])
