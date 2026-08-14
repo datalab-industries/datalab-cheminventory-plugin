@@ -206,16 +206,23 @@ class ChemInventoryDatalabSyncer:
             body={"data": [container]},
         )
 
-    def delete_container_in_cheminventory(self, container_id: int | str) -> None:
+    def delete_container_in_cheminventory(self, container_id: int | str) -> bool:
         """Delete a container in cheminventory; cheminventory has no separate
         disposal concept, and deleted containers remain restorable via the
         deleted containers list.
+
+        Returns:
+            True if the container was deleted, False if `c2d_only` is set and
+            the deletion was skipped.
         """
         if not self.c2d_only:
             self.cheminventory.post(
                 "/container/delete",
                 body={"containerid": [int(container_id)]},
             )
+            return True
+
+        return False
 
     def map_datalab_entry_to_cheminventory_container(
         self,
@@ -269,6 +276,8 @@ class ChemInventoryDatalabSyncer:
         starting_material["type"] = "starting_materials"
         starting_material["description"] = row["comments"] if row["comments"] != "None" else ""
         starting_material["status"] = "disposed" if row["disposed"] == "1" else "available"
+        if starting_material["status"] == "disposed":
+            LOGGER.debug("Mapping disposed container %s to datalab starting material", row["id"])
 
         if custom_fields:
             if CUSTOM_ID_FIELD in custom_fields:
@@ -444,11 +453,21 @@ class ChemInventoryDatalabSyncer:
                         found -= 1
                         continue
 
-                    if entry["status"] == "disposed":
+                    if entry.get("status") == "disposed":
                         LOGGER.debug(
                             "Skipping %s/%s: marked as disposed in datalab",
                             entry["name"],
                             entry["item_id"],
+                        )
+                        found -= 1
+                        continue
+
+                    elif entry.get("status") != "available":
+                        LOGGER.warning(
+                            "Skipping %s/%s: status %r not recognized",
+                            entry["name"],
+                            entry["item_id"],
+                            entry.get("status"),
                         )
                         found -= 1
                         continue
@@ -692,18 +711,12 @@ class ChemInventoryDatalabSyncer:
                 barcode = row.get("barcode")
                 existing_item = None
                 found_id = None
-                try:
-                    existing_item = datalab_client.get_item(barcode)
-                    found_id = barcode
-                except Exception:
-                    pass
 
-                if not existing_item:
-                    try:
-                        existing_item = datalab_client.get_item(container_id)
-                        found_id = container_id
-                    except Exception:
-                        pass
+                try:
+                    existing_item = datalab_client.get_item(container_id)
+                    found_id = container_id
+                except Exception:
+                    continue
 
                 if existing_item and found_id:
                     already_disposed = existing_item.get("status") == "disposed"
