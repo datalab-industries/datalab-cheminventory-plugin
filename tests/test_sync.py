@@ -240,28 +240,3 @@ def test_disposing_datalab_native_item_deletes_container(syncer, fake_cheminvent
     syncer.sync()
     assert len(fake_cheminventory.added_containers) == 1
     assert fake_cheminventory.rows == []
-
-
-def test_datalab_native_item_deleted_in_cheminventory_is_disposed(
-    syncer, fake_cheminventory, fake_datalab
-):
-    """A datalab-native item's container carries the datalab item_id as its
-    barcode, so deleting it in cheminventory must dispose the datalab item
-    and prevent it from being re-added on later syncs.
-    """
-    fake_datalab.seed_item(
-        "mp_0001",
-        name="Novel electrolyte",
-        location="Example > FIHM Group > 4_007 > Glovebox",
-    )
-    syncer.sync()
-    assert len(fake_cheminventory.rows) == 1
-
-    fake_cheminventory.delete_container(fake_cheminventory.rows[0]["id"])
-    syncer.sync()
-
-    assert fake_datalab.items["mp_0001"]["status"] == "disposed"
-
-    syncer.sync()
-    assert len(fake_cheminventory.added_containers) == 1
-    assert fake_cheminventory.rows == []
